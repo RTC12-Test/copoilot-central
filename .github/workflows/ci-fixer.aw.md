@@ -16,7 +16,6 @@ permissions:
   pull-requests: read
   issues: read
   actions: read
-  copilot-requests: write
 
 env:
   MONITOR_ORG: ${{ vars.MONITOR_ORG }}
@@ -35,9 +34,16 @@ network:
     - containers
     - ruby
 
-# Single GitHub token for everything (GitHub MCP server, checkout, safe outputs).
-# The secret is named `copilot`; gh-aw normally looks for GH_AW_GITHUB_TOKEN, so
-# explicit `github-token` overrides point every token resolution at secrets.COPILOT.
+# Two secrets:
+#  - COPILOT: fine-grained PAT for GitHub tooling (MCP server, checkout, safe
+#    outputs). Explicit `github-token` overrides point every GitHub token
+#    resolution at secrets.COPILOT.
+#  - COPILOT_GITHUB_TOKEN: fine-grained PAT with Account permission "Copilot
+#    Requests: Read" (resource owner = the personal account that owns the
+#    Copilot seat). This is what authenticates Copilot CLI inference.
+# NOTE: do NOT add `copilot-requests: write` to permissions — that would make
+# gh-aw hardcode `${{ github.token }}` for inference and ignore the PAT, and the
+# org has no Copilot seat entitlements for the Actions token (403 on /models).
 tools:
   github:
     toolsets: [default, actions]
