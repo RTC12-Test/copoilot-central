@@ -1,6 +1,6 @@
 ---
 name: CI Fixer
-description: "Safety-net scanner. Every 5 minutes it monitors the child repos for pull requests labelled ci_* (e.g. ci_python, ci_terraform), detects failing GitHub Actions runs on those PRs only, analyzes the console logs, fixes the root cause, and opens a fix PR. Language-agnostic: it detects the failure type from the logs (Python, Terraform/HCL, Java, Node/JS/TS, Go, YAML, Docker, generic) — never hardcoded to Python or Terraform. PRs without a ci_ label are ignored entirely. Engine is Copilot. Runs on schedule plus on-demand workflow_dispatch."
+description: "Safety-net scanner. Every 5 minutes it monitors the child repos for pull requests labelled ci_* (e.g. ci_python, ci_terraform), detects failing GitHub Actions runs on those PRs only, analyzes the console logs, fixes the root cause, and opens a fix PR. Language-agnostic: it detects the failure type from the logs (Python, Terraform/HCL, Java, Node/JS/TS, Go, YAML, Docker, generic) — never hardcoded to Python or Terraform. PRs without a ci_ label are ignored entirely. Engine is Google Gemini (GEMINI_API_KEY). Runs on schedule plus on-demand workflow_dispatch."
 on:
   # GitHub Actions minimum schedule interval is 5 minutes — this is the fastest
   # allowed. GitHub docs: "The shortest interval you can run scheduled workflows
@@ -9,7 +9,7 @@ on:
   schedule: every 5 minutes
   workflow_dispatch: {}
 
-engine: copilot
+engine: gemini
 
 permissions:
   contents: read
@@ -26,6 +26,7 @@ network:
     - defaults
     - github
     - copilot
+    - gemini
     - python
     - node
     - java
@@ -38,12 +39,11 @@ network:
 #  - COPILOT: fine-grained PAT for GitHub tooling (MCP server, checkout, safe
 #    outputs). Explicit `github-token` overrides point every GitHub token
 #    resolution at secrets.COPILOT.
-#  - COPILOT_GITHUB_TOKEN: fine-grained PAT with Account permission "Copilot
-#    Requests: Read" (resource owner = the personal account that owns the
-#    Copilot seat). This is what authenticates Copilot CLI inference.
-# NOTE: do NOT add `copilot-requests: write` to permissions — that would make
-# gh-aw hardcode `${{ github.token }}` for inference and ignore the PAT, and the
-# org has no Copilot seat entitlements for the Actions token (403 on /models).
+#  - GEMINI_API_KEY: Google AI Studio API key that authenticates the Google
+#    Gemini CLI inference engine (engine: gemini). gh-aw auto-injects it; it is
+#    not referenced explicitly in frontmatter.
+# NOTE: model is selected via the GH_AW_MODEL_AGENT_GEMINI repository variable
+# (currently gemini-3.6-flash, free-tier Google AI Studio).
 tools:
   github:
     toolsets: [default, actions]
