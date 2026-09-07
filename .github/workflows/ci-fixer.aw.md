@@ -9,7 +9,17 @@ on:
   schedule: every 5 minutes
   workflow_dispatch: {}
 
-engine: gemini
+engine:
+  id: gemini
+  env:
+    # Dummy API key that triggers the Gemini CLI's `gemini-api-key` auth method
+    # selection inside the agent container. gh-aw excludes the real
+    # GEMINI_API_KEY secret from the container and keeps it in the api-proxy
+    # sidecar, which substitutes the real credential on the wire. Without a
+    # value present in the container, gemini-cli fails immediately with
+    # "Invalid auth method selected" (exit 41). An `AIza`-prefixed dummy avoids
+    # gemini-cli's key-format validation.
+    GEMINI_API_KEY: "AIzaSyDummyKeyForProxyAuth_dummy0000000000"
 
 permissions:
   contents: read
