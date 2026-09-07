@@ -26,6 +26,7 @@ network:
   allowed:
     - defaults
     - github
+    - copilot
     - python
     - node
     - java
