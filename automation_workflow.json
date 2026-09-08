@@ -1,0 +1,1 @@
+{"name":"CI Monitor Agent - Dynamic ci_* Fix","prompt":"Monitor PR labels for ci_*** dynamically, derive child repo from suffix, check Actions: pass=ignore; fail=detect broken branch, gather changed files (skip deleted), create fix branch from broken base, open draft PR with label review.","trigger":{"type":"cron","schedule":"*/10 * * * *","timezone":"UTC"},"timeout":300}
