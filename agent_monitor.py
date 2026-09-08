@@ -2,11 +2,6 @@
 import urllib.request, json, os, re, time
 
 class AgentMonitor:
-    # HARDCODED LOGIC (per prompt.md): broken=feature/tas, repo=terraform_child, label=review, branch=opendhands_*
-    BROKEN_BRANCH = "feature/tas"
-    BROKEN_REPO = "terraform_child"
-    LABEL_TARGET = "review"
-    FIX_PREFIX = "opendhands_"
     LABEL_PATTERN = re.compile(r"^ci_(.+)$")
     
     def derive_repo(self, label):
