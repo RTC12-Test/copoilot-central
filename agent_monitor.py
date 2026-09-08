@@ -36,8 +36,8 @@ class AgentMonitor:
         payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; target={broken_branch}", "draft": True}
         try:
             ref_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/git/refs"
-            urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_branch}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_branch}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST"), timeout=10)
+            urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST"), timeout=10)
         except: pass
         req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
         try:
