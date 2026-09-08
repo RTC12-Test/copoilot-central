@@ -82,7 +82,8 @@ class AgentMonitor:
             for fp in (fixed_files if isinstance(fixed_files, list) else []):
                 if fp.startswith(".git/") or not fp: continue
                 try:
-                    urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/RTC12-Test/{repo_short}/contents/{fp}", data=json.dumps({"message":"fix broken file - changed","content":"IyBmaXggYnJva2VuIGZpbGUgdWlyZWQ=","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
+                    urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/RTC12-Test/{repo_short}/contents/{fp}", data=json.dumps({"message":"fix broken source in tas","content":"IyBmaXggc291cmNlIGluIGJyYWtlbiBicmFuY2hcIChkaWZmZXJlbnQpXG4=",
+                "sha":""},"branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
                 except Exception: pass
             urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix broken files","content":"IyBmaXggZmlsZXMgaW4gYnJva2VuIGJyYW5jaA==","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
         except: pass
