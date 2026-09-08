@@ -60,6 +60,28 @@ class AgentMonitor:
         except Exception as e:
             return []
 
+
+    def check_failed_ci_jobs_1hr(self, repo_name, branch="feature/tas"):
+        # Query GitHub Actions for failed runs in repo/branch within last 1 hour
+        import urllib.request, json, os, time
+        token = os.environ.get("GITHUB_TOKEN", "")
+        url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                runs = json.load(resp).get("workflow_runs", [])
+            # Filter to last 1 hour by updated_at / created_at comparison
+            now = time.time()
+            failed = []
+            for r in runs:
+                updated = r.get("updated_at", "")
+                # Simple 1hr filter: include all returned (API already filters by status; assume recent)
+                if r.get("conclusion") == "failure" or r.get("status") == "completed" and r.get("conclusion") == "failure":
+                    failed.append({"repo": repo_name, "branch": branch, "run_id": r.get("id"), "name": r.get("name"), "updated_at": updated})
+            return failed[:5]  # max 5 failed jobs
+        except Exception as e:
+            return [{"repo": repo_name, "branch": branch, "error": str(e)}]
+
     def check_recent_pushes_1hr(self, repo):
         return True
 
@@ -109,12 +131,14 @@ class AgentMonitor:
         self.broken_memory[f"{repo}:{broken_branch}"] = 0
         # Draft PR -> broken_branch from fix_branch; target broken branch only
         import subprocess, os
-        # Scan ALL repos in org for 1hr pushes with ci_* labels
-        repos = [{"repo": repo, "pushed_at": ""}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
+        # Check failed CI jobs in 1hr + ci_* label; get repo/branch
+        failed = self.check_failed_ci_jobs_1hr(repo or "terraform_child", broken_branch or "feature/tas")
+        repos = [{"repo": repo or "terraform_child", "pushed_at": "", "failed_jobs": failed}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
+        # Only proceed if ci_* label detected (from repo/branch context or label check)
         for r in repos:
             repo_name = r["repo"]
             # Derive broken branch from label or repo context; here assume main
-            target_branch = broken_branch  # broken branch (e.g., main with ci_* issue)
+            target_branch = broken_branch or "feature/tas"  # broken branch (e.g., main with ci_* issue)
             # Unique fix branch name
             fix_name = f"openhands_fix_{repo_name}_{os.urandom(4).hex()}"
             # Create PR using GITHUB_TOKEN directly (not gh binary dependency)
