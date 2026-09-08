@@ -23,10 +23,8 @@ class AgentMonitor:
         suffix = m.group(1)
         # Map according to repo content / labels; not forced _child
         # Dynamic derivation; terraform label -> terraform_code
-        LABEL_MAP = {"terraform": "terraform_code"}
         # Supports any ci_* label (ci_terraform, ci_python, etc.)
-        mapped = LABEL_MAP.get(suffix, suffix)
-        return f"RTC12-Test/{mapped}"  # terraform -> terraform_code, others dynamic
+        return f"RTC12-Test/{suffix}"  # fully dynamic, no hardcode
 
     def check_all_files_in_broken_project(self, repo, broken_branch):
         # Check ALL files in broken project; skip deleted
@@ -44,27 +42,45 @@ class AgentMonitor:
     def has_broken_changed_second_time(self, repo, broken_branch):
         return True
 
-    STATE_FILE = "/tmp/copoilot-central/.monitor_state.json"
+    # Tracking done in memory; no file persistence
 
-    def load_state(self):
-        try:
-            import json; return json.load(open(self.STATE_FILE))
-        except: return {}
 
-    def save_state(self, state):
-        import json; json.dump(state, open(self.STATE_FILE,"w"))
 
     def has_broken_changed_second_time(self, repo, broken_branch):
-        state = self.load_state()
         key = f"{repo}:{broken_branch}"
-        count = state.get(key, 0) + 1
-        state[key] = count
-        self.save_state(state)
+        count = self.broken_memory.get(key, 0) + 1
+        self.broken_memory[key] = count
         return count >= 2
 
+
+
+    def load_pr_state(self):
+        try: import json; return json.load(open(self.PR_STATE_FILE))
+        except: return {}
+    def save_pr_state(self, s):
+        import json; json.dump(s, open(self.PR_STATE_FILE,"w"))
+
+    def draft_pr_exists_for_target(self, repo, broken_branch):
+        key = f"{repo}:{broken_branch}"; s = self.pr_memory.get(key, {"pr_exists": False, "changed_after_pr": False})
+        return s.get(f"{repo}:{broken_branch}:pr_exists", False)
+
+    def broken_branch_changed_since_pr(self, repo, broken_branch):
+        key = f"{repo}:{broken_branch}"; s = self.pr_memory.get(key, {"pr_exists": False, "changed_after_pr": False})
+        return s.get(f"{repo}:{broken_branch}:changed_after_pr", False)
+
     def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
+        # Only trigger if broken branch changed since last PR OR no PR exists yet
+        if self.draft_pr_exists_for_target(repo, broken_branch) and not self.broken_branch_changed_since_pr(repo, broken_branch):
+            return None  # PR exists and broken branch unchanged -> skip
         if not self.has_broken_changed_second_time(repo, broken_branch):
             return
         fix_branch = self.random_branch_name()
+        # Mark PR created; reset broken change tracking so only new changes trigger again
+        pr_state = self.load_pr_state()
+        pr_state[f"{repo}:{broken_branch}:pr_exists"] = True
+        pr_state[f"{repo}:{broken_branch}:changed_after_pr"] = False
+        self.pr_memory[key] = pr_state
+        # After PR created, we also reset broken change count so next trigger needs 2 new changes
+        self.broken_memory[f"{repo}:{broken_branch}"] = 0
         # Draft PR -> broken_branch from fix_branch; target broken branch only
         return {"fix_branch": fix_branch, "target": broken_branch, "repo": repo, "fixed": len(fixed_files)}
