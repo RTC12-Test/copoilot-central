@@ -1,0 +1,1 @@
+Read prompts.md from RTC12-Test/copilot-center for instructions. Monitor all RTC12-Test repos centrally. When any PR has label ci_*** (e.g. ci_terraform, ci_python), identify the target child repo from the label suffix (terraform_child, python_child). Raise/update the PR in that child repo. Do not hardcode repos; derive from ci_* label dynamically.
