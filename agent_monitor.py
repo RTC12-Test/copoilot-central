@@ -22,9 +22,11 @@ class AgentMonitor:
             return None
         suffix = m.group(1)
         # Map according to repo content / labels; not forced _child
-        # Dynamic derivation: label suffix -> repo directly, no hardcode
+        # Dynamic derivation; terraform label -> terraform_code
+        LABEL_MAP = {"terraform": "terraform_code"}
         # Supports any ci_* label (ci_terraform, ci_python, etc.)
-        return f"RTC12-Test/{suffix}"
+        mapped = LABEL_MAP.get(suffix, suffix)
+        return f"RTC12-Test/{mapped}"  # terraform -> terraform_code, others dynamic
 
     def check_all_files_in_broken_project(self, repo, broken_branch):
         # Check ALL files in broken project; skip deleted
