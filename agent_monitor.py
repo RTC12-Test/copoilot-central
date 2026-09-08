@@ -107,4 +107,6 @@ class AgentMonitor:
         # After PR created, we also reset broken change count so next trigger needs 2 new changes
         self.broken_memory[f"{repo}:{broken_branch}"] = 0
         # Draft PR -> broken_branch from fix_branch; target broken branch only
+        import subprocess
+        subprocess.run(["gh","pr","create","--draft","--repo",repo,"--base",broken_branch,"--head",fix_branch,"--title","Fix " + broken_branch,"--body","Auto PR"], capture_output=True)
         return {"fix_branch": fix_branch, "target": broken_branch, "repo": repo, "fixed": len(fixed_files)}
