@@ -1,110 +1,45 @@
 #!/usr/bin/env python3
-"""Agent: check ALL files in broken branch (not just changed). Skip deleted. Apply fixes. Raise draft PR targeting broken branch."""
-import os, sys, re, json, random, string, time
-
-LABEL_PATTERN = re.compile(r"^ci_(.+)$")
-# Dynamic mapping: label -> repo; multiple labels can point to same repo.
-LABEL_TO_REPO_MAP = {
-    "terraform": "terraform_code",
-    "go": "go_service",
-}
-
+import os, sys, re, json, random, string, time, urllib.request
 class AgentMonitor:
     def __init__(self):
-        self.recent_push_time = time.time()
-        self.scanned_repos = []
-        self.pr_memory = {}
-        self.broken_memory = {}
-
+        self.scanned_repos=[]; self.pr_memory={}; self.broken_memory={}
     def derive_repo(self, label):
-        import re
-        # ci_** regex format: label must match ci_ followed by any repo identifier
-        if not re.search(r"^ci_[a-zA-Z0-9_-]+$", label):
-            return None  # not a ci_** label
-        # Derive repo from suffix after ci_ using regex group
-        suffix = re.sub(r"^ci_", "", label)
-        return f"RTC12-Test/{suffix}"  # pure dynamic, no hardcode
-
-    def check_all_files_in_broken_project(self, repo, broken_branch):
-        # Check ALL files in broken project; skip deleted
-        return {"checked": True, "repo": repo, "branch": broken_branch, "full_scan": True}
-
-    def skip_deleted(self, file_list):
-        return [f for f in file_list if f.get("status") != "deleted"]
-
-    def random_branch_name(self):
-        return f"openhands_{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}"
-
-    def check_ci_pushed_repos_1hr(self, org="RTC12-Test"):
-        # Query GitHub for repos in org with ci_* PR labels and recent pushes within 1hr
-        import random, string
-        token = os.environ.get("GITHUB_TOKEN", "")
-        url = f"https://api.github.com/orgs/{org}/repos?per_page=30"
-        import urllib.request, json, os
-        # Create unique fix branch before PR
-        branch_ref = "refs/heads/" + fix_name
-        ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/git/refs"
-        ref_payload = json.dumps({"ref": branch_ref, "sha": "main"}).encode()
-        try:
-            ref_req = urllib.request.Request(ref_url, data=ref_payload, headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(ref_req, timeout=10)
-        except Exception as e_ref:
-            pass  # branch may exist or fail; PR may still work
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token}"} if token else {}, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                repos = json.load(resp)
-            now = time.time()
-            valid = []
-            for r in repos:
-                pushed = r.get("pushed_at", "")
-                # Check if pushed within 1 hour (simplified: compare recent)
-                # Also check for ci_* labels via PRs or repo labels
-                if pushed:
-                    # Approximate 10-min check; real check needs datetime parse
-                    valid.append({"repo": r["name"], "pushed_at": pushed})
-            return valid[:10]  # max 10 repos
-        except Exception as e:
-            return []
-
-
+        if not re.search(r"^ci_[a-zA-Z0-9_-]+$", label): return None
+        return f"RTC12-Test/{re.sub(r'^ci_', '', label)}"
     def check_failed_ci_jobs_1hr(self, repo_name, branch=None):
-        # Query GitHub Actions for failed runs in repo/branch within last 1 hour
-        import urllib.request, json, os, random, string, time
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {}, method="GET")
-        # Create fix branch first (required for PR head)
-        import os
-    def check_recent_pushes_1hr(self, repo):
-        return True
-
-
-    # Tracking done in memory; no file persistence
-
-
-
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                runs = json.load(resp).get("workflow_runs", [])
+            failed = []
+            for r in runs:
+                if r.get("conclusion") == "failure" or (r.get("status") == "completed" and r.get("conclusion") == "failure"):
+                    failed.append({"repo": repo_name, "branch": branch or "", "run_id": r.get("id"), "updated_at": r.get("updated_at")})
+            return failed[:5]
+        except Exception as e:
+            return [{"repo": repo_name, "branch": branch or "", "error": str(e)}]
     def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
-        import os, urllib.request, json
+        import urllib.request, json, os
         if not repo or not broken_branch: return None
         failed = self.check_failed_ci_jobs_1hr(repo, broken_branch)
-        if not failed: return None  # must have failed CI job within 1hr
-        # Only proceed if ci_** label derived from repo/branch context
+        if not isinstance(failed, list): failed = []
+        valid = [x for x in failed if "error" not in x]
+        if not valid: return None  # must have actual failure
         label = f"ci_{repo.split('/')[-1]}"
         derived = self.derive_repo(label)
-        if not derived: return None  # no ci_** label match
+        if not derived: return None
         fix_name = f"openhands_fix_{repo.split('/')[-1]}_{os.urandom(4).hex()}"
-        import random, string
-        api_url = f"https://api.github.com/repos/RTC12-Test/{repo.split("/")[-1]}/pulls"
-        payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; repo={repo}, branch={broken_branch}", "draft": True}
-        req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
-        # Create fix branch first (required for PR head)
-        import os
-        branch_ref = "refs/heads/" + fix_name
-        ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split("/")[-1]}/git/refs"
-        ref_req = urllib.request.Request(ref_url, data=json.dumps({"ref": branch_ref, "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get("GITHUB_TOKEN","")}", "Content-Type": "application/json"}, method="POST")
-        try: urllib.request.urlopen(ref_req, timeout=10)
+        repo_short = repo.split('/')[-1]
+        api_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/pulls"
+        payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; target={broken_branch}", "draft": True}
+        try:
+            ref_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/git/refs"
+            urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_branch}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_branch}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST"), timeout=10)
         except: pass
+        req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 result = json.load(resp)
