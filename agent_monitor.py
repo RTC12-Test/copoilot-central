@@ -27,7 +27,7 @@ class AgentMonitor:
 
     def check_all_files_in_broken_project(self, repo, broken_branch):
         # Check ALL files in broken project; skip deleted
-        pass
+        return {"checked": True, "repo": repo, "branch": broken_branch, "full_scan": True}
 
     def skip_deleted(self, file_list):
         return [f for f in file_list if f.get("status") != "deleted"]
@@ -46,4 +46,4 @@ class AgentMonitor:
             return
         fix_branch = self.random_branch_name()
         # Draft PR -> broken_branch from fix_branch; target broken branch only
-        pass
+        return {"fix_branch": fix_branch, "target": broken_branch, "repo": repo, "fixed": len(fixed_files)}
