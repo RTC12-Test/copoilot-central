@@ -68,7 +68,7 @@ class AgentMonitor:
         fix_name = f"openhands_fix_{repo.split('/')[-1]}_{os.urandom(4).hex()}"
         repo_short = repo.split('/')[-1]
         api_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/pulls"
-        payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": broken_branch, "base": fix_name, "body": f"Draft PR for failed CI within 1hr; target={broken_branch}", "draft": True}  # aravind15b: broken -> fix
+        payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; target={broken_branch}", "draft": True}
         try:
             ref_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/git/refs"
             urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
