@@ -14,6 +14,8 @@ class AgentMonitor:
     def __init__(self):
         self.recent_push_time = time.time()
         self.scanned_repos = []
+        self.pr_memory = {}
+        self.broken_memory = {}
 
     def derive_repo(self, label):
         # Check ci_* labels; derive repo from label but allow any repo name.
