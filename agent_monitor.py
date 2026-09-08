@@ -6,7 +6,6 @@ LABEL_PATTERN = re.compile(r"^ci_(.+)$")
 # Dynamic mapping: label -> repo; multiple labels can point to same repo.
 LABEL_TO_REPO_MAP = {
     "terraform": "terraform_code",
-    "python": "python_project",
     "go": "go_service",
 }
 
@@ -41,6 +40,16 @@ class AgentMonitor:
         import random, string
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/orgs/{org}/repos?per_page=30"
+        import urllib.request, json, os
+        # Create unique fix branch before PR
+        branch_ref = "refs/heads/" + fix_name
+        ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/git/refs"
+        ref_payload = json.dumps({"ref": branch_ref, "sha": "main"}).encode()
+        try:
+            ref_req = urllib.request.Request(ref_url, data=ref_payload, headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(ref_req, timeout=10)
+        except Exception as e_ref:
+            pass  # branch may exist or fail; PR may still work
         req = urllib.request.Request(url, headers={"Authorization": f"token {token}"} if token else {}, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -65,21 +74,8 @@ class AgentMonitor:
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {}, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                runs = json.load(resp).get("workflow_runs", [])
-            # Filter to last 1 hour by updated_at / created_at comparison
-            now = time.time()
-            failed = []
-            for r in runs:
-                updated = r.get("updated_at", "")
-                # Simple 1hr filter: include all returned (API already filters by status; assume recent)
-                if r.get("conclusion") == "failure" or r.get("status") == "completed" and r.get("conclusion") == "failure":
-                    failed.append({"repo": repo_name, "branch": branch, "run_id": r.get("id"), "name": r.get("name"), "updated_at": updated})
-            return failed[:5]  # max 5 failed jobs
-        except Exception as e:
-            return [{"repo": repo_name, "branch": branch, "error": str(e)}]
-
+        # Create fix branch first (required for PR head)
+        import os
     def check_recent_pushes_1hr(self, repo):
         return True
 
@@ -99,9 +95,16 @@ class AgentMonitor:
         if not derived: return None  # no ci_** label match
         fix_name = f"openhands_fix_{repo.split('/')[-1]}_{os.urandom(4).hex()}"
         import random, string
-        api_url = f"https://api.github.com/repos/{repo}/pulls"
+        api_url = f"https://api.github.com/repos/RTC12-Test/{repo.split("/")[-1]}/pulls"
         payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; repo={repo}, branch={broken_branch}", "draft": True}
         req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
+        # Create fix branch first (required for PR head)
+        import os
+        branch_ref = "refs/heads/" + fix_name
+        ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split("/")[-1]}/git/refs"
+        ref_req = urllib.request.Request(ref_url, data=json.dumps({"ref": branch_ref, "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get("GITHUB_TOKEN","")}", "Content-Type": "application/json"}, method="POST")
+        try: urllib.request.urlopen(ref_req, timeout=10)
+        except: pass
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 result = json.load(resp)
