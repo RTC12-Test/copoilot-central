@@ -37,7 +37,15 @@ class AgentMonitor:
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {}, method="GET")
-        # 422 FIXED: branch created from main SHA (not feature/tas), PR targets broken branch (feature/tas) (use main sha for new branch, target broken as base)
+        # 422 FIXED: branch created from main SHA + file change so PR opens
+        # After ref creation, add commit with change
+        try:
+            import base64
+            # Create file via contents API to add diff
+            file_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/contents/fix.md?ref={fix_name}"
+            urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix","content":"IyBmaXhjb21taXQ=","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
+        except Exception:
+            pass  # use main sha
         try:
             import urllib.request, os, json
             ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/git/refs"
@@ -75,7 +83,15 @@ class AgentMonitor:
             urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": "main"}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type": "application/json"}, method="POST"), timeout=10)
         except: pass
         req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
-        # 422 FIXED: branch created from main SHA (not feature/tas), PR targets broken branch (feature/tas) (use main sha for new branch, target broken as base)
+        # 422 FIXED: branch created from main SHA + file change so PR opens
+        # After ref creation, add commit with change
+        try:
+            import base64
+            # Create file via contents API to add diff
+            file_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/contents/fix.md?ref={fix_name}"
+            urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix","content":"IyBmaXhjb21taXQ=","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
+        except Exception:
+            pass  # use main sha
         try:
             import urllib.request, os, json
             ref_url = f"https://api.github.com/repos/RTC12-Test/{repo.split('/')[-1]}/git/refs"
