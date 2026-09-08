@@ -1,41 +1,28 @@
 #!/usr/bin/env python3
-"""CI Monitor Agent for RTC12-Test central repo.
-- Watches ci_*** PR labels dynamically (derived from label, not hardcoded).
-- Monitors child repo Actions; ignores pass, handles fail.
-- On fail: detects broken branch from workflow run, gathers changed files (skips deleted),
-  creates fix branch from broken base, pushes draft PR, assigns label 'review'.
-- Tracks changes only in broken branch; skips deleted files."""
+"""Agent: check ALL files in broken branch (not just changed). Skip deleted. Apply fixes. Raise draft PR targeting broken branch."""
 import os, sys, re, json
 
 LABEL_PATTERN = re.compile(r"^ci_(.+)$")
 
 class AgentMonitor:
-    def __init__(self, token=None):
-        self.token = token or os.getenv("GITHUB_TOKEN")
-        # Could initialize PyGithub here if installed
+    def __init__(self):
+        pass
 
-    def derive_child_repo(self, label: str) -> str:
+    def derive_repo(self, label):
         m = LABEL_PATTERN.match(label)
-        if not m:
-            return None
+        if not m: return None
         suffix = m.group(1)
-        # Dynamic mapping from repos_config or label; default to suffix-child
-        mapping = {"terraform": "terraform-child", "python": "python-child"}
-        child_name = mapping.get(suffix, f"{suffix}-child")
-        return f"RTC12-Test/{child_name}"
+        # Dynamic derivation - never hardcode all repos; derive from label
+        return f"RTC12-Test/{suffix}_child"  # e.g. ci_terraform -> terraform_child
 
-    def get_failed_run(self, repo: str, branch: str):
-        # Placeholder: query GitHub Actions for failed run on branch
+    def check_all_files_in_broken_branch(self, repo, broken_branch):
+        """Review/check ALL files in broken branch, not just changed files."""
+        # List all files on broken branch
         pass
 
-    def gather_changed_files(self, repo: str, branch: str, broken_branch: str):
-        # Gather diff from broken branch; skip deleted files
-        # Return list of files to fix
-        pass
+    def skip_deleted(self, file_list):
+        return [f for f in file_list if f.get("status") != "deleted"]
 
-    def create_fix_pr(self, repo: str, from_branch: str, files: list):
-        # Create new branch from broken base, push, open draft PR, label review
+    def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
+        # Create/update draft PR targeting broken branch
         pass
-
-if __name__ == "__main__":
-    agent = AgentMonitor()
