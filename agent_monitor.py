@@ -97,7 +97,7 @@ class AgentMonitor:
         if not repo or not broken_branch:
             return None
         # Ensure repo was recently pushed (1hr window) via git log / GitHub check
-        if not self.check_ci_pushed_repos_10min("RTC12-Test"):
+        if not self.check_ci_pushed_repos_1hr("RTC12-Test"):
             return None
         fix_branch = self.random_branch_name()
         # Mark PR created; reset broken change tracking so only new changes trigger again
