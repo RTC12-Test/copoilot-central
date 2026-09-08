@@ -41,6 +41,24 @@ class AgentMonitor:
     def has_broken_changed_second_time(self, repo, broken_branch):
         return True
 
+    STATE_FILE = "/tmp/copoilot-central/.monitor_state.json"
+
+    def load_state(self):
+        try:
+            import json; return json.load(open(self.STATE_FILE))
+        except: return {}
+
+    def save_state(self, state):
+        import json; json.dump(state, open(self.STATE_FILE,"w"))
+
+    def has_broken_changed_second_time(self, repo, broken_branch):
+        state = self.load_state()
+        key = f"{repo}:{broken_branch}"
+        count = state.get(key, 0) + 1
+        state[key] = count
+        self.save_state(state)
+        return count >= 2
+
     def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
         if not self.has_broken_changed_second_time(repo, broken_branch):
             return
