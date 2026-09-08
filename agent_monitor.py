@@ -12,7 +12,8 @@ LABEL_TO_REPO_MAP = {
 
 class AgentMonitor:
     def __init__(self):
-        pass
+        self.recent_push_time = time.time()
+        self.scanned_repos = []
 
     def derive_repo(self, label):
         # Check ci_* labels; derive repo from label but allow any repo name.
@@ -21,8 +22,8 @@ class AgentMonitor:
             return None
         suffix = m.group(1)
         # Map according to repo content / labels; not forced _child
-        if suffix in LABEL_TO_REPO_MAP:
-            return f"RTC12-Test/{LABEL_TO_REPO_MAP[suffix]}"
+        # Dynamic derivation: label suffix -> repo directly, no hardcode
+        # Supports any ci_* label (ci_terraform, ci_python, etc.)
         return f"RTC12-Test/{suffix}"
 
     def check_all_files_in_broken_project(self, repo, broken_branch):
