@@ -104,10 +104,43 @@ class AgentMonitor:
         pr_state = self.load_pr_state()
         pr_state[f"{repo}:{broken_branch}:pr_exists"] = True
         pr_state[f"{repo}:{broken_branch}:changed_after_pr"] = False
-        self.pr_memory[key] = pr_state
+
         # After PR created, we also reset broken change count so next trigger needs 2 new changes
         self.broken_memory[f"{repo}:{broken_branch}"] = 0
         # Draft PR -> broken_branch from fix_branch; target broken branch only
-        import subprocess
-        subprocess.run(["gh","pr","create","--draft","--repo",repo,"--base",broken_branch,"--head",fix_branch,"--title","Fix " + broken_branch,"--body","Auto PR"], capture_output=True)
+        import subprocess, os
+        # Scan ALL repos in org for 1hr pushes with ci_* labels
+        repos = self.check_ci_pushed_repos_1hr("RTC12-Test")
+        for r in repos:
+            repo_name = r["repo"]
+            # Derive broken branch from label or repo context; here assume main
+            target_branch = broken_branch  # broken branch (e.g., main with ci_* issue)
+            # Unique fix branch name
+            fix_name = f"openhands_fix_{repo_name}_{os.urandom(4).hex()}"
+            # Create PR using GITHUB_TOKEN directly (not gh binary dependency)
+            import urllib.request, json
+            api_url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/pulls"
+            payload = {
+                "title": f"Auto fix PR for {repo_name} ({target_branch})",
+                "head": fix_name,
+                "base": target_branch,
+                "body": f"Draft PR created by agent_monitor for repo with ci_* within 1hr. Target: {target_branch}, derived repo: {repo_name}",
+                "draft": True
+            }
+            req = urllib.request.Request(
+                api_url,
+                data=json.dumps(payload).encode(),
+                headers={
+                    "Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "Content-Type": "application/json"
+                },
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    result = json.load(resp)
+                    return {"pr_url": result.get("html_url"), "repo": repo_name, "fix_branch": fix_name, "base": target_branch}
+            except Exception as e:
+                return {"pr_url": None, "repo": repo_name, "fix_branch": fix_name, "error": str(e)}
         return {"fix_branch": fix_branch, "target": broken_branch, "repo": repo, "fixed": len(fixed_files)}
