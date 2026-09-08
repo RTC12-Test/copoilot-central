@@ -38,7 +38,7 @@ class AgentMonitor:
 
     def check_ci_pushed_repos_1hr(self, org="RTC12-Test"):
         # Query GitHub for repos in org with ci_* PR labels and recent pushes within 1hr
-        import urllib.request, json, os
+        import random, string
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/orgs/{org}/repos?per_page=30"
         req = urllib.request.Request(url, headers={"Authorization": f"token {token}"} if token else {}, method="GET")
@@ -61,7 +61,7 @@ class AgentMonitor:
 
     def check_failed_ci_jobs_1hr(self, repo_name, branch=None):
         # Query GitHub Actions for failed runs in repo/branch within last 1 hour
-        import urllib.request, json, os, time
+        import urllib.request, json, os, random, string, time
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {}, method="GET")
@@ -83,86 +83,28 @@ class AgentMonitor:
     def check_recent_pushes_1hr(self, repo):
         return True
 
-    def has_broken_changed_second_time(self, repo, broken_branch):
-        return True
 
     # Tracking done in memory; no file persistence
 
 
 
-    def has_broken_changed_second_time(self, repo, broken_branch):
-        key = f"{repo}:{broken_branch}"
-        count = self.broken_memory.get(key, 0) + 1
-        self.broken_memory[key] = count
-        return count >= 2
-
-
-
-    def load_pr_state(self):
-        try: import json; return json.load(open(self.PR_STATE_FILE))
-        except: return {}
-    def save_pr_state(self, s):
-        import json; json.dump(s, open(self.PR_STATE_FILE,"w"))
-
-    def draft_pr_exists_for_target(self, repo, broken_branch):
-        key = f"{repo}:{broken_branch}"; s = self.pr_memory.get(key, {"pr_exists": False, "changed_after_pr": False})
-        return s.get(f"{repo}:{broken_branch}:pr_exists", False)
-
-    def broken_branch_changed_since_pr(self, repo, broken_branch):
-        key = f"{repo}:{broken_branch}"; s = self.pr_memory.get(key, {"pr_exists": False, "changed_after_pr": False})
-        return s.get(f"{repo}:{broken_branch}:changed_after_pr", False)
-
     def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
-        # Trigger immediately when pushed-within-1hr repo with ci_** detected; no count>=2
-        if not repo or not broken_branch:
-            return None
-        # Ensure repo was recently pushed (1hr window) via git log / GitHub check
-        if not self.check_ci_pushed_repos_1hr("RTC12-Test"):
-            return None
-        fix_branch = self.random_branch_name()
-        # Mark PR created; reset broken change tracking so only new changes trigger again
-        pr_state = self.load_pr_state()
-        pr_state[f"{repo}:{broken_branch}:pr_exists"] = True
-        pr_state[f"{repo}:{broken_branch}:changed_after_pr"] = False
-
-        # After PR created, we also reset broken change count so next trigger needs 2 new changes
-        self.broken_memory[f"{repo}:{broken_branch}"] = 0
-        # Draft PR -> broken_branch from fix_branch; target broken branch only
-        import subprocess, os
-        # Check failed CI jobs in 1hr + ci_* label; get repo/branch
+        import os, urllib.request, json
+        if not repo or not broken_branch: return None
         failed = self.check_failed_ci_jobs_1hr(repo, broken_branch)
-        repos = [{"repo": repo, "pushed_at": "", "failed_jobs": failed}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
-        # Only proceed if ci_* label detected (from repo/branch context or label check)
-        for r in repos:
-            repo_name = r["repo"]
-            # Derive broken branch from label or repo context; here assume main
-            target_branch = broken_branch  # broken branch (e.g., main with ci_* issue)
-            # Unique fix branch name
-            fix_name = f"openhands_fix_{repo_name}_{os.urandom(4).hex()}"
-            # Create PR using GITHUB_TOKEN directly (not gh binary dependency)
-            import urllib.request, json
-            api_url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/pulls"
-            payload = {
-                "title": f"Auto fix PR for {repo_name} ({target_branch})",
-                "head": fix_name,
-                "base": target_branch,
-                "body": f"Draft PR created by agent_monitor for repo with ci_* within 1hr. Target: {target_branch}, derived repo: {repo_name}",
-                "draft": True
-            }
-            req = urllib.request.Request(
-                api_url,
-                data=json.dumps(payload).encode(),
-                headers={
-                    "Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}",
-                    "Accept": "application/vnd.github.v3+json",
-                    "Content-Type": "application/json"
-                },
-                method="POST"
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    result = json.load(resp)
-                    return {"pr_url": result.get("html_url"), "repo": repo_name, "fix_branch": fix_name, "base": target_branch}
-            except Exception as e:
-                return {"pr_url": None, "repo": repo_name, "fix_branch": fix_name, "error": str(e)}
-        return {"fix_branch": fix_branch, "target": broken_branch, "repo": repo, "fixed": len(fixed_files)}
+        if not failed: return None  # must have failed CI job within 1hr
+        # Only proceed if ci_** label derived from repo/branch context
+        label = f"ci_{repo.split('/')[-1]}"
+        derived = self.derive_repo(label)
+        if not derived: return None  # no ci_** label match
+        fix_name = f"openhands_fix_{repo.split('/')[-1]}_{os.urandom(4).hex()}"
+        import random, string
+        api_url = f"https://api.github.com/repos/{repo}/pulls"
+        payload = {"title": f"Auto fix PR for {repo} ({broken_branch})", "head": fix_name, "base": broken_branch, "body": f"Draft PR for failed CI within 1hr; repo={repo}, branch={broken_branch}", "draft": True}
+        req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept": "application/vnd.github.v3+json", "Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.load(resp)
+                return {"pr_url": result.get("html_url"), "repo": repo, "fix_branch": fix_name, "base": broken_branch}
+        except Exception as e:
+            return {"pr_url": None, "repo": repo, "fix_branch": fix_name, "base": broken_branch, "error": str(e)}
