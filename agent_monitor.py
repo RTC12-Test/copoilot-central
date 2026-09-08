@@ -18,15 +18,13 @@ class AgentMonitor:
         self.broken_memory = {}
 
     def derive_repo(self, label):
-        # Check ci_* labels; derive repo from label but allow any repo name.
-        m = LABEL_PATTERN.match(label)
-        if not m:
-            return None
-        suffix = m.group(1)
-        # Map according to repo content / labels; not forced _child
-        # Dynamic derivation; terraform label -> terraform_code
-        # Supports any ci_* label (ci_terraform, ci_python, etc.)
-        return f"RTC12-Test/{suffix}"  # fully dynamic, no hardcode
+        import re
+        # ci_** regex format: label must match ci_ followed by any repo identifier
+        if not re.search(r"^ci_[a-zA-Z0-9_-]+$", label):
+            return None  # not a ci_** label
+        # Derive repo from suffix after ci_ using regex group
+        suffix = re.sub(r"^ci_", "", label)
+        return f"RTC12-Test/{suffix}"  # pure dynamic, no hardcode
 
     def check_all_files_in_broken_project(self, repo, broken_branch):
         # Check ALL files in broken project; skip deleted
@@ -61,7 +59,7 @@ class AgentMonitor:
             return []
 
 
-    def check_failed_ci_jobs_1hr(self, repo_name, branch="feature/tas"):
+    def check_failed_ci_jobs_1hr(self, repo_name, branch=None):
         # Query GitHub Actions for failed runs in repo/branch within last 1 hour
         import urllib.request, json, os, time
         token = os.environ.get("GITHUB_TOKEN", "")
@@ -132,13 +130,13 @@ class AgentMonitor:
         # Draft PR -> broken_branch from fix_branch; target broken branch only
         import subprocess, os
         # Check failed CI jobs in 1hr + ci_* label; get repo/branch
-        failed = self.check_failed_ci_jobs_1hr(repo or "terraform_child", broken_branch or "feature/tas")
-        repos = [{"repo": repo or "terraform_child", "pushed_at": "", "failed_jobs": failed}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
+        failed = self.check_failed_ci_jobs_1hr(repo, broken_branch)
+        repos = [{"repo": repo, "pushed_at": "", "failed_jobs": failed}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
         # Only proceed if ci_* label detected (from repo/branch context or label check)
         for r in repos:
             repo_name = r["repo"]
             # Derive broken branch from label or repo context; here assume main
-            target_branch = broken_branch or "feature/tas"  # broken branch (e.g., main with ci_* issue)
+            target_branch = broken_branch  # broken branch (e.g., main with ci_* issue)
             # Unique fix branch name
             fix_name = f"openhands_fix_{repo_name}_{os.urandom(4).hex()}"
             # Create PR using GITHUB_TOKEN directly (not gh binary dependency)
