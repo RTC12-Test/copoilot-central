@@ -79,7 +79,7 @@ class AgentMonitor:
         # Add diff file so branches not identical
         try:
             file_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/contents/fix.md"
-            urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix","content":"IyBmaXhjb21taXQ=","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
+            urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix broken files","content":"IyBmaXggZmlsZXMgaW4gYnJva2VuIGJyYW5jaA==","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
         except: pass
         req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept":"application/vnd.github.v3+json", "Content-Type":"application/json"}, method="POST")
         try:
