@@ -93,11 +93,12 @@ class AgentMonitor:
         return s.get(f"{repo}:{broken_branch}:changed_after_pr", False)
 
     def create_fix_pr_on_broken_branch(self, repo, broken_branch, fixed_files):
-        # Only trigger if broken branch changed since last PR OR no PR exists yet
-        if self.draft_pr_exists_for_target(repo, broken_branch) and not self.broken_branch_changed_since_pr(repo, broken_branch):
-            return None  # PR exists and broken branch unchanged -> skip
-        if not self.has_broken_changed_second_time(repo, broken_branch):
-            return
+        # Trigger immediately when pushed-within-1hr repo with ci_** detected; no count>=2
+        if not repo or not broken_branch:
+            return None
+        # Ensure repo was recently pushed (1hr window) via git log / GitHub check
+        if not self.check_ci_pushed_repos_10min("RTC12-Test"):
+            return None
         fix_branch = self.random_branch_name()
         # Mark PR created; reset broken change tracking so only new changes trigger again
         pr_state = self.load_pr_state()
