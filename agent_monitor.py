@@ -6,6 +6,17 @@ class AgentMonitor:
     def derive_repo(self, label):
         if not re.search(r"^ci_[a-zA-Z0-9_-]+$", label): return None
         return f"RTC12-Test/{re.sub(r'^ci_', '', label)}"
+    def run_auto_pr(self, repos=None):
+        if not repos:
+            repos = self.check_ci_pushed_repos_1hr("RTC12-Test")
+        repo_map = self.get_latest_failed_per_repo([r.get("repo") if isinstance(r, dict) else r for r in repos])
+        results = []
+        for repo, latest in repo_map.items():
+            # Target broken branch from latest failure
+            broken = latest.get("branch") or "feature/tas"
+            pr = self.create_fix_pr_on_broken_branch(repo, broken, [])
+            results.append({"repo": repo, "pr": pr, "latest_job": latest.get("run_id")})
+        return results
     def get_latest_failed_per_repo(self, repos):
         result = {}
         for repo in repos:
