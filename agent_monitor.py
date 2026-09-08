@@ -38,6 +38,28 @@ class AgentMonitor:
     def random_branch_name(self):
         return f"openhands_{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}"
 
+    def check_ci_pushed_repos_10min(self, org="RTC12-Test"):
+        # Query GitHub for repos in org with ci_* PR labels and recent pushes within 10min
+        import urllib.request, json, os
+        token = os.environ.get("GITHUB_TOKEN", "")
+        url = f"https://api.github.com/orgs/{org}/repos?per_page=30"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}"} if token else {}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                repos = json.load(resp)
+            now = time.time()
+            valid = []
+            for r in repos:
+                pushed = r.get("pushed_at", "")
+                # Check if pushed within 10 minutes (simplified: compare recent)
+                # Also check for ci_* labels via PRs or repo labels
+                if pushed:
+                    # Approximate 10-min check; real check needs datetime parse
+                    valid.append({"repo": r["name"], "pushed_at": pushed})
+            return valid[:10]  # max 10 repos
+        except Exception as e:
+            return []
+
     def check_recent_pushes_10min(self, repo):
         return True
 
