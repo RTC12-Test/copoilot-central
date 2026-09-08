@@ -63,11 +63,11 @@ class AgentMonitor:
         label = f"ci_{repo.split('/')[-1]}"
         derived = self.derive_repo(label)
         if not derived: return None
-        fix_name = f"openhands_fix_{repo.split('/')[-1]}_{os.urandom(4).hex()}"
+        fix_name = f"opendhands_{os.urandom(3).hex()}"
         repo_short = repo.split('/')[-1]
         # 7. Create branch from broken branch (not main) with correct SHA
         api_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/pulls"
-        payload = {"title": f"Auto fix PR for {repo}", "head": fix_name, "base": broken_branch, "body": f"Draft PR; fix branch={fix_name}", "draft": True}
+        payload = {"title": f"Auto fix PR for {repo}", "head": broken_branch, "base": fix_name, "body": f"Draft PR; fix branch={fix_name}", "draft": True}
         try:
             # Get broken branch SHA for branch creation
             ref_req = urllib.request.Request(f"https://api.github.com/repos/RTC12-Test/{repo_short}/git/refs/heads/{broken_branch}", headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}"}, method="GET")
