@@ -5,7 +5,7 @@ import os, sys, re, json, random, string, time
 LABEL_PATTERN = re.compile(r"^ci_(.+)$")
 # Dynamic mapping: label -> repo; multiple labels can point to same repo.
 LABEL_TO_REPO_MAP = {
-    "terraform": "terraform",
+    "terraform": "terraform_code",
     "python": "python_project",
     "go": "go_service",
 }
