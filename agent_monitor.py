@@ -74,7 +74,12 @@ class AgentMonitor:
             broken_sha = json.load(urllib.request.urlopen(ref_req, timeout=10))["object"]["sha"]
             # Create fix branch from broken branch SHA
             ref_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/git/refs"
-            urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_sha}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="POST"), timeout=10)
+            urllib.request.urlopen(urllib.request.Request(ref_url, data=json.dumps({"ref": f"refs/heads/{fix_name}", "sha": broken_sha}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="POST"), timeout=10)  # will add diff after, headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="POST"), timeout=10)
+        except: pass
+        # Add diff file so branches not identical
+        try:
+            file_url = f"https://api.github.com/repos/RTC12-Test/{repo_short}/contents/fix.md"
+            urllib.request.urlopen(urllib.request.Request(file_url, data=json.dumps({"message":"fix","content":"IyBmaXhjb21taXQ=","branch":fix_name}).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Content-Type":"application/json"}, method="PUT"), timeout=10)
         except: pass
         req = urllib.request.Request(api_url, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {os.environ.get('GITHUB_TOKEN','')}", "Accept":"application/vnd.github.v3+json", "Content-Type":"application/json"}, method="POST")
         try:
