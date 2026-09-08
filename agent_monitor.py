@@ -6,6 +6,20 @@ class AgentMonitor:
     def derive_repo(self, label):
         if not re.search(r"^ci_[a-zA-Z0-9_-]+$", label): return None
         return f"RTC12-Test/{re.sub(r'^ci_', '', label)}"
+    def get_latest_failed_per_repo(self, repos):
+        result = {}
+        for repo in repos:
+            repo_name = repo
+            label = f"ci_{repo.split('/')[-1]}"
+            derived = self.derive_repo(label)
+            if not derived: continue
+            failed = self.check_failed_ci_jobs_1hr(repo_name, "feature/tas")
+            valid = [f for f in failed if isinstance(f, dict) and "error" not in f]
+            if valid:
+                latest = max(valid, key=lambda x: x.get("updated_at", ""))
+                result[repo_name] = latest
+        return result
+
     def check_failed_ci_jobs_1hr(self, repo_name, branch=None):
         token = os.environ.get("GITHUB_TOKEN", "")
         url = f"https://api.github.com/repos/RTC12-Test/{repo_name}/actions/runs?branch={branch}&status=failure&per_page=10"
