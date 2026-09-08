@@ -13,7 +13,7 @@ LABEL_TO_REPO_MAP = {
 class AgentMonitor:
     def __init__(self):
         self.recent_push_time = time.time()
-        self.scanned_jobs = []
+        self.scanned_repos = []
 
     def derive_repo(self, label):
         # Check ci_* labels; derive repo from label but allow any repo name.
