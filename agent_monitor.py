@@ -110,7 +110,7 @@ class AgentMonitor:
         # Draft PR -> broken_branch from fix_branch; target broken branch only
         import subprocess, os
         # Scan ALL repos in org for 1hr pushes with ci_* labels
-        repos = self.check_ci_pushed_repos_1hr("RTC12-Test")
+        repos = [{"repo": repo, "pushed_at": ""}] if repo else self.check_ci_pushed_repos_1hr("RTC12-Test")
         for r in repos:
             repo_name = r["repo"]
             # Derive broken branch from label or repo context; here assume main
