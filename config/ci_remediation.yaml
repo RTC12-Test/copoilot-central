@@ -1,0 +1,27 @@
+repositories:
+  - name: terraform_child
+    url: https://github.com/example/terraform_child
+    branch: feature/xyz
+    labels:
+      - ci_terraform
+  - name: python_child
+    url: https://github.com/example/python_child
+    branch: feature/xyz
+    labels:
+      - ci_python
+      - ci_java
+  - name: java_child
+    url: https://github.com/example/java_child
+    branch: feature/xyz
+    labels:
+      - ci_java
+  - name: go_child
+    url: https://github.com/example/go_child
+    branch: feature/xyz
+    labels:
+      - ci_go
+  - name: rust_child
+    url: https://github.com/example/rust_child
+    branch: feature/xyz
+    labels:
+      - ci_rust
