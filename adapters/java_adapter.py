@@ -17,7 +17,7 @@ class JavaAdapter(BaseTechAdapter):
         lower = logs.lower()
         if "cannot find symbol" in lower or "illegal start of expression" in lower or "class, interface, or enum expected" in lower:
             return FailureCategory.SYNTAX
-        if "package does not exist" in lower or "import.*cannot be resolved" in lower:
+        if ("package" in lower and "does not exist" in lower) or "package does not exist" in lower or re.search(r"import\s+.*cannot be resolved", lower):
             return FailureCategory.DEPENDENCY
         if "testfailed" in lower or "junit" in lower or "assertionerror" in lower:
             return FailureCategory.TEST_FAILURE
@@ -105,7 +105,7 @@ class JavaAdapter(BaseTechAdapter):
 
         return FixPlan(
             files=files, changes=changes, validation_commands=commands,
-            root_cause=root_cause, fix_description=fix_desc
+            root_cause=root_cause, tech=self.tech, fix_description=fix_desc
         )
 
     def _fix_syntax(self, content: str, ctx) -> str:

@@ -7,8 +7,9 @@ from typing import Tuple, List, Optional
 class RepositoryManager:
     """Manages local git operations, cloning, branch isolation, and commits."""
 
-    def __init__(self, base_workspace: str = "/tmp/remediation_workspaces"):
+    def __init__(self, base_workspace: str = "/tmp/remediation_workspaces", token: Optional[str] = None):
         self.base_workspace = os.path.abspath(base_workspace)
+        self.token = token or os.environ.get("GITHUB_TOKEN", "")
         os.makedirs(self.base_workspace, exist_ok=True)
 
     def prepare_workspace(
@@ -31,7 +32,7 @@ class RepositoryManager:
         if os.path.exists(workspace):
             shutil.rmtree(workspace, ignore_errors=True)
 
-        token = os.environ.get("GITHUB_TOKEN", "")
+        token = self.token or os.environ.get("GITHUB_TOKEN", "")
         if token:
             clone_url = f"https://x-access-token:{token}@github.com/{repo_clean}.git"
         else:

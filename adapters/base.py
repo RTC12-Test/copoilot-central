@@ -17,6 +17,7 @@ class FixPlan:
     changes: Dict[str, str] = field(default_factory=dict)
     validation_commands: List[str] = field(default_factory=list)
     root_cause: str = ""
+    tech: str = ""
     fix_description: str = ""
 
 

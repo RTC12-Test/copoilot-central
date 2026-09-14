@@ -48,7 +48,10 @@ class GitHubClient:
         try:
             data = self._api_request(endpoint)
         except Exception as e:
-            print(f"[WARN] Failed to fetch workflow runs for {repo}: {e}")
+            if "HTTPError 404" in str(e):
+                print(f"[INFO] Repository {repo} has no failed runs or is not accessible (404)")
+            else:
+                print(f"[WARN] Failed to fetch workflow runs for {repo}: {e}")
             return []
 
         events = []
@@ -62,7 +65,8 @@ class GitHubClient:
                     broken_branch=run.get("head_branch", "main"),
                     head_sha=run.get("head_sha", ""),
                     html_url=run.get("html_url", ""),
-                    updated_at=run.get("updated_at", "")
+                    updated_at=run.get("updated_at", ""),
+                    workflow_path=run.get("path", ""),
                 ))
         return events
 
@@ -121,6 +125,142 @@ class GitHubClient:
             pass
         return list(set(labels))
 
+    def get_authenticated_user(self) -> Optional[str]:
+        """Return the login of the token's authenticated user."""
+        try:
+            data = self._api_request("user")
+            return data.get("login")
+        except Exception:
+            return None
+
+    def list_user_orgs(self) -> List[str]:
+        """Return organizations the authenticated user belongs to."""
+        orgs = []
+        page = 1
+        while True:
+            try:
+                data = self._api_request(f"user/memberships/orgs?per_page=100&page={page}",
+                                         headers={"Accept": "application/vnd.github.v3+json"})
+            except Exception as e:
+                print(f"[WARN] Failed to list user orgs: {e}")
+                break
+            if not isinstance(data, list) or not data:
+                break
+            for m in data:
+                orgs.append(m.get("organization", {}).get("login") or m.get("login") or "")
+            if len(data) < 100:
+                break
+            page += 1
+        return [o for o in orgs if o]
+
+    def resolve_orgs_from_token(self) -> List[str]:
+        """Resolve which orgs to scan from the token.
+
+        Prefers the authenticated user's org memberships; if the user has none,
+        falls back to the user's own account (so user-owned repos are scanned).
+        """
+        user = self.get_authenticated_user()
+        orgs = self.list_user_orgs()
+        if not orgs and user:
+            orgs = [user]
+        return orgs
+
+    def list_org_repos(self, org: str) -> List[Dict]:
+        """List all repositories belonging to an organization."""
+        org = org.strip("/").split("/")[-1]
+        repos = []
+        page = 1
+        while True:
+            endpoint = f"orgs/{org}/repos?per_page=100&page={page}"
+            try:
+                data = self._api_request(endpoint)
+            except Exception as e:
+                print(f"[WARN] Failed to list org repos for {org}: {e}")
+                break
+            if not isinstance(data, list) or not data:
+                break
+            for r in data:
+                topics = r.get("topics", [])
+                if not topics:
+                    topics = self.get_repo_topics(r.get("full_name") or r.get("name", ""))
+                repos.append({
+                    "name": r.get("name", ""),
+                    "full_name": r.get("full_name", ""),
+                    "url": r.get("html_url") or f"https://github.com/{r.get('full_name','')}",
+                    "default_branch": r.get("default_branch", "main"),
+                    "topics": topics,
+                    "pushed_at": r.get("pushed_at", ""),
+                })
+            if len(data) < 100:
+                break
+            page += 1
+        return repos
+
+    def get_repo_topics(self, repo: str) -> List[str]:
+        """Authoritative GitHub topics for a repository.
+
+        The org-level repo listing does not always include the `topics` field
+        (or returns it empty), so fetch them from the per-repo topics endpoint
+        when a repo shows no topics.
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(
+                f"repos/{repo_clean}/topics",
+                headers={"Accept": "application/vnd.github.mercy-preview+json"},
+            )
+            return [str(t) for t in (data.get("names") or [])]
+        except Exception as e:
+            print(f"[WARN] Failed to list topics for {repo_clean}: {e}")
+            return []
+
+    def repo_has_workflows(self, repo: str, ref: Optional[str] = None) -> bool:
+        """Check whether a repository has GitHub Actions workflows on the
+        given ref (default branch by default). Returns False on 404/error."""
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        endpoint = f"repos/{repo_clean}/contents/.github/workflows"
+        if ref:
+            endpoint += f"?ref={ref}"
+        try:
+            data = self._api_request(endpoint)
+            return isinstance(data, list) and any(
+                str(f.get("name", "")).endswith((".yml", ".yaml")) for f in data
+            )
+        except Exception:
+            return False
+
+    def list_repo_workflows(self, repo: str, ref: Optional[str] = None) -> List[str]:
+        """Return the workflow file names (.github/workflows/*.yml|*.yaml)
+        present on the given ref (default branch if not specified)."""
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        endpoint = f"repos/{repo_clean}/contents/.github/workflows"
+        if ref:
+            endpoint += f"?ref={ref}"
+        try:
+            data = self._api_request(endpoint)
+            return [str(f.get("name", "")) for f in data
+                    if isinstance(data, list)
+                    and str(f.get("name", "")).endswith((".yml", ".yaml"))]
+        except Exception:
+            return []
+
+    def has_open_fix_pr(self, repo: str, base: str) -> bool:
+        """Return True if an open PR already targets `base` from an ai-fix branch.
+
+        Lets the agent skip repos that were already remediated so it does not
+        re-fix the same failed run on every poll.
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(f"repos/{repo_clean}/pulls?state=open&base={base}")
+            return any(
+                str(p.get("head", {}).get("ref", "")).startswith("ai-fix/")
+                for p in data
+            )
+        except Exception as e:
+            print(f"[WARN] Failed to list open PRs for {repo_clean} ({base}): {e}")
+            return False
+
     def get_changed_files(self, repo: str, base_or_branch: str) -> List[str]:
         """Get changed files on branch/PR."""
         repo_clean = repo.replace("https://github.com/", "").strip("/")
@@ -166,6 +306,14 @@ class GitHubClient:
 
             return pr_url
         except Exception as e:
+            if "already exists" in str(e).lower():
+                try:
+                    pulls = self._api_request(f"repos/{repo_clean}/pulls?state=open")
+                    for p in pulls:
+                        if p.get("head", {}).get("ref") == head:
+                            return p.get("html_url")
+                except Exception:
+                    pass
             print(f"[ERROR] Failed to create PR for {repo_clean} ({head} -> {base}): {e}")
             return None
 

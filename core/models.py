@@ -22,9 +22,11 @@ class CIEvent:
     job_name: str
     broken_branch: str
     head_sha: str
+    conclusion: str = "failure"
     labels: List[str] = field(default_factory=list)
     html_url: str = ""
     updated_at: str = ""
+    workflow_path: str = ""
 
 
 @dataclass

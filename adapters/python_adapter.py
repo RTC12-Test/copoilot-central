@@ -35,13 +35,15 @@ class PythonAdapter(BaseTechAdapter):
         error_summary = logs[:500] if logs else "No logs available"
 
         import re
+        lower = logs.lower()
         if category in (FailureCategory.SYNTAX, FailureCategory.TEST_FAILURE):
             m = re.search(r'File "(?P<file>[^"]+)", line (?P<line>\d+)', logs)
             if m:
                 file_path = m.group("file")
                 try: line_number = int(m.group("line"))
                 except ValueError: line_number = None
-            elif "modulenotfounderror" in lower:
+        elif category == FailureCategory.DEPENDENCY:
+            if "modulenotfounderror" in lower:
                 m = re.search(r'ModuleNotFoundError: No module named \'([^\']+)\'', logs)
                 if m:
                     file_path = f"{m.group(1)}.py"
@@ -104,7 +106,7 @@ class PythonAdapter(BaseTechAdapter):
 
         return FixPlan(
             files=files, changes=changes, validation_commands=commands,
-            root_cause=root_cause, fix_description=fix_desc
+            root_cause=root_cause, tech=self.tech, fix_description=fix_desc
         )
 
     def _fix_syntax(self, content: str, ctx) -> str:

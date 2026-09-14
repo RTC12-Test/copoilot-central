@@ -1,27 +1,71 @@
-repositories:
-  - name: terraform_child
-    url: https://github.com/example/terraform_child
-    branch: feature/xyz
-    labels:
-      - ci_terraform
-  - name: python_child
-    url: https://github.com/example/python_child
-    branch: feature/xyz
-    labels:
-      - ci_python
-      - ci_java
-  - name: java_child
-    url: https://github.com/example/java_child
-    branch: feature/xyz
-    labels:
-      - ci_java
-  - name: go_child
-    url: https://github.com/example/go_child
-    branch: feature/xyz
-    labels:
-      - ci_go
-  - name: rust_child
-    url: https://github.com/example/rust_child
-    branch: feature/xyz
-    labels:
-      - ci_rust
+# CI Remediation Agent — configuration.
+#
+# The agent discovers monitored repositories DYNAMICALLY and is fully
+# repository-name agnostic (no `_child` suffix dependency). It keeps only
+# repositories carrying ci_* topics (ci_terraform, ci_python, ci_java, ...)
+# and monitors their latest failed CI runs.
+#
+# By DEFAULT the organizations to scan are derived from the GITHUB_TOKEN:
+#   - the authenticated user's org memberships, or
+#   - the user's own account if they belong to no org.
+#
+# `organizations` (OPTIONAL): override to pin specific orgs to scan instead of
+# deriving them from the token. Accepts a list of names or a list of dicts
+# {name: <org>, branch: <default branch>}.
+#
+# `repositories` (OPTIONAL seed / override): if provided, this fixed list is
+# used INSTEAD of dynamic discovery. Useful to pin default branches or include
+# a repo unreachable via the org listing.
+
+# `monitoring.provider` selects how the agent explains the CI failure
+# (root cause + category) once a failed run is found:
+#   heuristic -> deterministic log-pattern analysis (offline, default)
+#   ai        -> the pluggable AI model (see config/ai_models.yaml),
+#                e.g. GitHub Copilot CLI; falls back to heuristic if unavailable.
+# Can also be overridden at runtime via CI_MONITOR_PROVIDER.
+#
+# `monitoring.repo_selection` selects which orgs/repos the agent monitors:
+#   ai        -> the pluggable AI model (see config/ai_models.yaml), e.g.
+#                GitHub Copilot CLI, picks the active dev repos/orgs to monitor
+#                among all enumerated repositories (default). The model receives
+#                each repo's last-push time and ci_* labels and keeps repos that
+#                were pushed within the last 24h (default recovery window) or
+#                carry a ci_* label; all other repos are skipped.
+#   heuristic -> keep all repos found by the API enumeration (no AI filtering).
+# Can also be overridden at runtime via CI_MONITOR_REPO_SELECTION.
+#
+# Discovery is AI-driven: the agent enumerates all org repos via the API (code
+# never filters them) and asks the AI model which orgs/repos to monitor
+# (see monitoring.repo_selection). For every failed run it then uses the
+# ci_<tech> label generated for THAT run — first from the run's workflow file
+# (e.g. .github/workflows/terraform-ci.yaml -> ci_terraform), then from the
+# run's logs when the workflow name is generic (e.g. ci.yaml + python logs ->
+# ci_python). Runs with no supported tech in either are skipped (e.g.
+# start_ec2.yaml + AWS logs -> no ci_* label, never remediated).
+
+# `fixing.engine` selects who generates the code fixes:
+#   ai       -> the pluggable AI model (see config/ai_models.yaml), e.g. GitHub
+#               Copilot CLI, fixes ALL failure categories (syntax, compile,
+#               tests, deps, ...) by editing the repo in place — no heuristic
+#               adapters involved (default).
+#   adapter  -> legacy heuristic adapters generate the fix (offline fallback).
+# Can also be overridden at runtime via CI_FIX_ENGINE.
+# Note: adapters are ALWAYS still used for validation commands (build/test/check).
+
+fixing:
+  engine: ai   # ai | adapter
+
+monitoring:
+  provider: heuristic   # heuristic | ai
+  repo_selection: ai   # ai | heuristic
+
+# Uncomment to pin organizations (otherwise derived from the token):
+# organizations:
+#   - name: RTC12-Test
+#     branch: feature/tas
+
+# Optional explicit override — uncomment to use a fixed list instead of discovery:
+# repositories:
+#   - name: terraform_child
+#     url: https://github.com/RTC12-Test/terraform_child
+#     labels: [ci_terraform]

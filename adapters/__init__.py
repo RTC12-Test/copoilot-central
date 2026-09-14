@@ -13,6 +13,8 @@ REGISTRY = {
     "rust": RustAdapter,
 }
 
+SUPPORTED_TECHS = set(REGISTRY)
+
 def get_adapter(tech: str) -> BaseTechAdapter:
     cls = REGISTRY.get(tech)
     if not cls:
@@ -21,5 +23,7 @@ def get_adapter(tech: str) -> BaseTechAdapter:
 
 def resolve_tech_from_label(label: str) -> str:
     if label.startswith("ci_"):
-        return label[3:]
+        tech = label[3:]
+        # Aliases: the same adapter backend covers multiple label spellings.
+        return {"golang": "go"}.get(tech, tech)
     return label

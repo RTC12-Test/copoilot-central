@@ -1,0 +1,20 @@
+# AI model backend — plug-and-play.
+#
+# The model used for CI log analysis and fix generation is selected here.
+# Swap the backend without touching core monitoring logic.
+#
+# Options:
+#   name: copilot     -> GitHub Copilot CLI (default; uses `copilot` binary)
+#   name: openai      -> OpenAI API (requires OPENAI_API_KEY or api_key)
+#   name: anthropic   -> Anthropic Claude API (requires ANTHROPIC_API_KEY or api_key)
+#
+# Can also be overridden at runtime with the CI_AI_MODEL env var
+# (e.g. CI_AI_MODEL=openai python3 main.py).
+
+ai:
+  model:
+    name: copilot        # copilot | openai | anthropic
+    binary: copilot      # copilot binary path (copilot backend only)
+    # api_key: ""        # for openai/anthropic; or set OPENAI_API_KEY / ANTHROPIC_API_KEY
+    # model: "gpt-4o"    # openai: gpt-4o | anthropic: claude-sonnet-4-5
+    timeout: 180
