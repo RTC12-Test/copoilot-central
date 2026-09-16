@@ -8,9 +8,12 @@ from core.models import CIEvent, ErrorContext, FixResult, FailureCategory
 from core.repository_manager import RepositoryManager
 from adapters import get_adapter, resolve_tech_from_label, SUPPORTED_TECHS
 from adapters.base import FixPlan, ValidationResult
-from engine.label_resolver import resolve_primary_technology, resolve_technology_from_labels, get_adapter_for_label
 from ai import get_ai_model, load_model_config
 from monitoring import get_failure_monitor
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
 
 
 class CIOrchestrator:
@@ -51,12 +54,41 @@ class CIOrchestrator:
             return None
 
     def _load_config(self) -> dict:
-        """Load CI remediation configuration."""
-        config_path = "/home/ghost/Documents/copilot/agent/copoilot-central/config/ci_remediation.yaml"
+        """Load CI remediation configuration.
+
+        Path resolution: $CI_REMEDIATION_CONFIG > <project>/config/
+        ci_remediation.yaml. No machine-specific absolute paths are embedded.
+        """
+        config_path = (os.environ.get("CI_REMEDIATION_CONFIG")
+                       or os.path.join(CONFIG_DIR, "ci_remediation.yaml"))
         if os.path.exists(config_path):
             with open(config_path) as f:
                 import yaml; return yaml.safe_load(f) or {}
         return {}
+
+    def _self_repo(self) -> str:
+        """Name of the agent's own repo, excluded from monitoring.
+
+        Resolution order:
+        1. config `agent.self_repo`
+        2. $CI_SELF_REPO env var
+        3. local `git remote get-url origin` (repo name only)
+        4. "" -> nothing excluded
+        """
+        agent_cfg = self.config.get("agent") or {}
+        if agent_cfg.get("self_repo"):
+            return str(agent_cfg["self_repo"])
+        env = os.environ.get("CI_SELF_REPO", "").strip()
+        if env:
+            return env
+        try:
+            url = subprocess.check_output(
+                ["git", "remote", "get-url", "origin"],
+                stderr=subprocess.DEVNULL, text=True).strip()
+            name = url.rstrip("/").rstrip(".git").split("/")[-1]
+            return name
+        except Exception:
+            return ""
 
     def _org_repos(self) -> List[str]:
         """Resolve the organizations to scan.
@@ -107,12 +139,12 @@ class CIOrchestrator:
             (o.get("name") if isinstance(o, dict) else o): (o.get("branch") if isinstance(o, dict) else None)
             for o in org_configs
         }
-        self_repo = "copoilot-central"
+        self_repo = self._self_repo()
         for org in orgs:
             org_repos = self.client.list_org_repos(org)
             default_branch = default_branches.get(org) or default_branch
             for r in org_repos:
-                if r.get("name") == self_repo:
+                if self_repo and r.get("name") == self_repo:
                     continue
                 seen_key = r.get("full_name") or r.get("name")
                 if any(d.get("repo_key") == seen_key for d in discovered):
@@ -197,6 +229,7 @@ class CIOrchestrator:
                   f"({len(candidates)} candidates)...")
             names = self.ai_model.select_repos(candidates, {
                 "orgs": self._org_repos(),
+                "self_repo": self._self_repo(),
             })
             if not names:
                 print("[SELECT] model returned no selection; keeping all candidates")
@@ -250,33 +283,83 @@ class CIOrchestrator:
         return out
 
     def get_latest_failed(self, repos: List[Dict]) -> Optional[CIEvent]:
-        """Find the most recent failed CI run across monitored repos."""
-        latest = None
-        for repo in repos:
-            events = self.client.list_recent_failed_runs(repo["url"], limit=10)
-            for ev in events:
-                if ev.conclusion == "failure":
-                    if latest is None or ev.updated_at > latest.updated_at:
-                        latest = ev
-        return latest
-
-    def get_latest_failed_events(self, repos: List[Dict]) -> List[CIEvent]:
-        """Find all recent failed CI runs across monitored repos, newest first."""
-        events: List[CIEvent] = []
+        """Find the CI run to remediate: code enumerates candidate failed runs
+        (one newest per repo) and the AI model picks one. When the model is
+        unavailable or returns nothing, falls back to the most recently updated
+        failed run (previous behavior).
+        """
+        candidates: List[CIEvent] = []
         for repo in repos:
             for ev in self.client.list_recent_failed_runs(repo["url"], limit=10):
                 if ev.conclusion == "failure":
-                    events.append(ev)
-        events.sort(key=lambda ev: ev.updated_at, reverse=True)
-        return events
+                    candidates.append(ev)
+                    break
+        if not candidates:
+            return None
 
-    def get_failed_job_logs(self, repo: str, run_id: int) -> str:
-        """Retrieve logs from a failed workflow run."""
-        return self.client.get_failed_job_logs(repo, run_id)
+        chosen = self._ai_select_run(candidates)
+        if chosen is None:
+            chosen = max(candidates, key=lambda ev: ev.updated_at)
+            print(f"[SELECT-RUN] using latest failed run {chosen.run_id} "
+                  f"in {chosen.repo} (updated {chosen.updated_at})")
+        return chosen
 
-    def get_repo_source_files(self, repo: str, base_or_branch: str) -> Dict[str, str]:
-        """Get list of changed files in the broken branch."""
-        return self.client.get_changed_files(repo, base_or_branch)
+    def _ai_select_run(self, candidates: List[CIEvent]) -> Optional[CIEvent]:
+        """Ask the pluggable model which candidate run to remediate."""
+        try:
+            if not self.ai_model.is_available():
+                print("[SELECT-RUN] model unavailable; using code fallback")
+                return None
+            print(f"[SELECT-RUN] choosing run via '{self.ai_model.name}' "
+                  f"({len(candidates)} candidates)...")
+            key = self.ai_model.select_run(candidates, {"orgs": self._org_repos()})
+            if not key:
+                print("[SELECT-RUN] model returned no selection; using code fallback")
+                return None
+            chosen = self._match_run(candidates, key)
+            if chosen is not None:
+                print(f"[SELECT-RUN] model selected run {chosen.run_id} "
+                      f"in {chosen.repo}")
+            else:
+                print(f"[SELECT-RUN] selection '{key}' matched no candidate; "
+                      "using code fallback")
+            return chosen
+        except Exception as e:
+            print(f"[SELECT-RUN] selection failed ({e}); using code fallback")
+            return None
+
+    def _match_run(self, candidates: List[CIEvent], key: str) -> Optional[CIEvent]:
+        """Match a model key ('org/repo' or 'org/repo#run_id') to a candidate.
+
+        With a run_id the run must match exactly; with only a repo the newest
+        failed run of that repo is chosen (fallback semantics preserved).
+        """
+        key = (key or "").strip()
+        if not key:
+            return None
+        repo_key, _, run_part = key.partition("#")
+        repo_key = repo_key.rstrip("/")
+        run_id = None
+        if run_part:
+            try:
+                run_id = int(run_part)
+            except ValueError:
+                run_id = None
+
+        def same_repo(ev: CIEvent) -> bool:
+            r = ev.repo
+            return repo_key == r or repo_key == r.split("/")[-1] \
+                or r == repo_key.split("/")[-1] if repo_key else False
+
+        same = [ev for ev in candidates if same_repo(ev)]
+        if not same:
+            return None
+        if run_id is not None:
+            for ev in same:
+                if ev.run_id == run_id:
+                    return ev
+            return None
+        return max(same, key=lambda ev: ev.updated_at)
 
     def create_fix_branch(self, repo: str, broken_branch: str, run_id: int, tech: str) -> Tuple[str, str]:
         """Create a new branch from the broken branch (preserving base)."""
@@ -629,9 +712,15 @@ class CIOrchestrator:
         return True
 
     def run_full_remediation(self, repos: List[Dict]) -> bool:
-        """Main remediation workflow — iterates all repos with failed runs."""
-        failed_events = self.get_latest_failed_events(repos)
-        if not failed_events:
+        """Main remediation workflow — remediates ONE failed CI run.
+
+        The failed-run candidates are enumerated per repo; the AI model selects
+        which run to fix (latest-by-updated_at is the code fallback), so each
+        invocation handles a single failure instead of re-processing every
+        older failure.
+        """
+        latest = self.get_latest_failed(repos)
+        if not latest:
             print("No failed CI runs found.")
             print("Tip: ensure GITHUB_TOKEN is set and valid, and that the child"
                   " repositories are accessible to the token. Repositories are"
@@ -639,15 +728,10 @@ class CIOrchestrator:
                   " name (ci_* labels determine the technology, not the repo name).")
             return False
 
-        print(f"Found {len(failed_events)} failed run(s) across {len(repos)} repo(s)")
-        any_success = False
-        for event in failed_events:
-            try:
-                success = self._fix_single_run(event, repos)
-                if success:
-                    any_success = True
-            except Exception as e:
-                print(f"[ERROR] Failed to remediate run {event.run_id}: {e}")
-        if not any_success:
-            print("No failed runs were successfully remediated.")
-        return any_success
+        print(f"Handling latest failed run {latest.run_id} in {latest.repo} "
+              f"(updated {latest.updated_at}) across {len(repos)} repo(s)")
+        try:
+            return self._fix_single_run(latest, repos)
+        except Exception as e:
+            print(f"[ERROR] Failed to remediate run {latest.run_id}: {e}")
+            return False

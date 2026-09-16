@@ -6,7 +6,8 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from .base import AIModel, parse_repo_selection, parse_pr_content
+from .base import (AIModel, parse_repo_selection, parse_pr_content,
+                   parse_run_selection)
 
 
 class CopilotCLIModel(AIModel):
@@ -99,6 +100,9 @@ class CopilotCLIModel(AIModel):
                 "recent_push_within_24h": recent,
                 "default_branch": c.get("default_branch", c.get("branch", "main")),
             })
+        self_repo = (context or {}).get("self_repo") or ""
+        skip_self = (f"Also skip the central agent repo itself "
+                     f"({self_repo}) and " ) if self_repo else "Also "
         prompt = (
             "You are the repo-monitoring selector for a CI remediation agent. "
             "The agent automatically fixes failed GitHub Actions runs of the "
@@ -107,15 +111,50 @@ class CopilotCLIModel(AIModel):
             "qualifies if it was PUSHED within the last 24 hours (the default "
             "recovery window) OR carries a ci_* label (ci_terraform, ci_python, "
             "ci_java, ci_go, ci_rust, ...).\n"
-            "SKIP all other repos (no ci_* label and no push within 24h). Also "
-            "skip the central agent repo itself (copoilot-central) and archived/"
-            "dead projects.\n"
+            "SKIP all other repos (no ci_* label and no push within 24h). "
+            + skip_self +
+            "archived/dead projects.\n"
             "Reply with ONLY a JSON array of full_names, e.g. "
             '["org/repo-a","org/repo-b"]. No prose, no markdown.\n\n'
             f"CANDIDATES:\n{json.dumps(payload, indent=1)}"
         )
         raw = self._run(prompt)
         return parse_repo_selection(raw)
+
+    def select_run(self, candidates: List["CIEvent"],
+                   context: Optional[Dict] = None) -> Optional[str]:
+        """Ask Copilot which failed CI run the agent should remediate next.
+
+        Candidates are the current failed runs (one newest per repo). Copilot
+        picks ONE, returning its key ("org/repo" or "org/repo#run_id"), or None
+        so the caller falls back to the run most recently updated.
+        """
+        if not candidates:
+            return None
+        payload = [{
+            "repo": c.repo,
+            "run_id": c.run_id,
+            "workflow": c.workflow_name,
+            "job": c.job_name,
+            "branch": c.broken_branch,
+            "labels": c.labels,
+            "updated_at": c.updated_at,
+        } for c in candidates]
+        prompt = (
+            "You are the run-selection step of a CI remediation agent. The "
+            "agent auto-fixes ONE failed GitHub Actions run per invocation and "
+            "opens a pull request for it.\n"
+            "SELECT the single most appropriate run to remediate now: prefer a "
+            "run whose failure is a genuine code problem (syntax, compilation, "
+            "broken tests, terraform validation) on a project with a ci_* label. "
+            "Avoid already-remediated/duplicate runs and trivial environment "
+            "failures.\n"
+            "Reply with ONLY a JSON object, e.g. "
+            '{"repo": "org/repo", "run_id": 123}. No prose, no markdown.\n\n'
+            f"CANDIDATES:\n{json.dumps(payload, indent=1)}"
+        )
+        raw = self._run(prompt)
+        return parse_run_selection(raw)
 
     def fix_workspace(self, workspace: str, logs: str, analysis: str,
                       context: Optional[Dict] = None) -> Dict[str, str]:

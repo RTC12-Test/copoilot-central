@@ -6,7 +6,11 @@ from .base import AIModel
 from .copilot_model import CopilotCLIModel
 from .provider_models import OpenAIModel, AnthropicModel
 
-DEFAULT_CONFIG_PATH = "/home/ghost/Documents/copilot/agent/copoilot-central/config/ai_models.yaml"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Resolution: $CI_MODEL_CONFIG > <project>/config/ai_models.yaml.
+DEFAULT_CONFIG_PATH = (os.environ.get("CI_MODEL_CONFIG")
+                       or os.path.join(_PROJECT_ROOT, "config", "ai_models.yaml"))
 
 
 def load_model_config(path: str = DEFAULT_CONFIG_PATH) -> Dict:

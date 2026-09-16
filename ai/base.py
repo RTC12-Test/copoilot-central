@@ -51,6 +51,35 @@ def parse_pr_content(text: str) -> Dict:
     }
 
 
+def parse_run_selection(text: str) -> Optional[str]:
+    """Extract a candidate identifier from the model's run-selection reply.
+
+    Accepts a JSON object like {"repo": "org/repo", "run_id": 123} or a bare
+    string "org/repo" (or "org/repo#123"). Returns a normalized key of the form
+    "org/repo" or "org/repo#123", or None when nothing useful was returned.
+    """
+    if not text:
+        return None
+    m = re.search(r"\{.*\}", text, re.S)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            repo = data.get("repo") or data.get("full_name") or data.get("name")
+            run_id = data.get("run_id") or data.get("id") or data.get("run")
+            if repo:
+                repo = str(repo).strip("/")
+                return f"{repo}#{int(run_id)}" if run_id else repo
+    m = re.search(r'["\']?([^"\'\s,]+)["\']?', text)
+    if m:
+        key = m.group(1).strip("/")
+        if key and key.lower() not in ("none", "null", "none."):
+            return key
+    return None
+
+
 class AIModel(ABC):
     """Pluggable interface for AI-driven CI remediation.
 
@@ -89,6 +118,18 @@ class AIModel(ABC):
         """
         return [str(c.get("repo_key") or c.get("name") or "")
                 for c in candidates]
+
+    def select_run(self, candidates: List["CIEvent"],
+                   context: Optional[Dict] = None) -> Optional[str]:
+        """Pick which failed CI run to remediate next.
+
+        `candidates` is the list of current failed runs (one per repo, newest
+        per repo). Returns a candidate key like "org/repo" or "org/repo#123",
+        or None to let the caller fall back to its own heuristic (the latest
+        failed run by updated_at). Implementations that cannot reason about
+        runs should just return None.
+        """
+        return None
 
     def fix_workspace(self, workspace: str, logs: str, analysis: str,
                       context: Optional[Dict] = None) -> Dict[str, str]:

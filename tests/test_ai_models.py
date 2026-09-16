@@ -108,6 +108,29 @@ class TestSelectRepos(unittest.TestCase):
                                   {"repo_key": "RTC12-Test/other"}])
         self.assertEqual(out, ["RTC12-Test/terraform_child"])
 
+    def test_copilot_select_run_parses(self):
+        from ai.copilot_model import CopilotCLIModel
+        from core.models import CIEvent
+        cands = [
+            CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                    job_name="J", broken_branch="main", head_sha="a",
+                    updated_at="2026-09-14T06:30:00Z"),
+            CIEvent(repo="RTC12-Test/terraform_child", run_id=22, workflow_name="W",
+                    job_name="J", broken_branch="main", head_sha="b",
+                    updated_at="2026-09-14T06:31:00Z"),
+        ]
+        with mock.patch.object(CopilotCLIModel, "_run",
+                               return_value='{"repo": "RTC12-Test/asd2", "run_id": 11}'):
+            m = CopilotCLIModel()
+            self.assertEqual(m.select_run(cands),
+                             "RTC12-Test/asd2#11")
+
+    def test_default_select_run_falls_back_to_none(self):
+        from ai.provider_models import OpenAIModel
+        m = OpenAIModel()
+        with mock.patch.object(m, "is_available", return_value=False):
+            self.assertIsNone(m.select_run([]))
+
 
 class TestParsePrContent(unittest.TestCase):
     def test_parses_json_with_fences(self):

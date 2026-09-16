@@ -322,6 +322,94 @@ class TestLabelResolution(unittest.TestCase):
         o.client = FakeClient()
         self.assertEqual(o._org_repos(), ["RTC12-Test", "AcmeCorp"])
 
+    def test_run_selection_ai_picks_run(self):
+        from engine.orchestrator import CIOrchestrator
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                if url == "u1":
+                    return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
+                                    workflow_name="W", job_name="J",
+                                    broken_branch="main", head_sha="a",
+                                    updated_at="2026-09-14T06:30:00Z")]
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="main", head_sha="b",
+                                updated_at="2026-09-14T06:31:00Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                return "RTC12-Test/asd2#11"
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"},
+                                      {"name": "terraform_child", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 11)
+        self.assertEqual(chosen.repo, "RTC12-Test/asd2")
+
+    def test_run_selection_falls_back_to_latest_when_model_unavailable(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                if url == "u1":
+                    return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
+                                    workflow_name="W", job_name="J",
+                                    broken_branch="main", head_sha="a",
+                                    updated_at="2026-09-14T06:30:00Z")]
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="main", head_sha="b",
+                                updated_at="2026-09-14T06:31:00Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"},
+                                      {"name": "terraform_child", "url": "u2"}])
+        # newest by updated_at wins as the code fallback
+        self.assertEqual(chosen.run_id, 22)
+
+    def test_run_selection_unmatched_key_falls_back(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                                job_name="J", broken_branch="main", head_sha="a",
+                                updated_at="2026-09-14T06:30:00Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                return "RTC12-Test/nope#999"
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"}])
+        self.assertEqual(chosen.run_id, 11)
+
 
 if __name__ == "__main__":
     unittest.main()
