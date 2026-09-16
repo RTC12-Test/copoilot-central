@@ -766,7 +766,7 @@ class CIOrchestrator:
             print(f"[AI] fix generation failed, keeping heuristic changes: {e}")
         return plan
 
-    def _fix_single_run(self, latest: CIEvent, repos: List[Dict]) -> bool:
+    def fix_single_run(self, latest: CIEvent, repos: List[Dict]) -> bool:
         """Remediate a single failed CI run. Returns True on success."""
         print(f"\nProcessing failed run: {latest}")
         run_id = latest.run_id
@@ -916,22 +916,49 @@ class CIOrchestrator:
                 return n
         return None
 
-    def run_full_remediation(self, repos: List[Dict]) -> bool:
-        """Remediate EVERY eligible failed CI run across all monitored repos.
+    def fix_next(self, repos: List[Dict]) -> Optional[CIEvent]:
+        """Run ONE remediation iteration and return the run it fixed.
 
-        Loops until no eligible failure remains:
+        Public, per-iteration entry point — this is the body of the fix-all
+        loop, usable on its own for a single fix:
           1. Every monitored repo is checked for its first failed CI job (its
-             newest failing run not covered by an open ai-fix PR) -> one
-             candidate per repo.
+             newest failing run within the recency window, not covered by an
+             open ai-fix PR) -> one candidate per repo.
           2. The AI model selects exactly one of those runs to fix (fallback:
              newest by updated_at; a single candidate skips the model call).
-          3. The selected run is fixed and an open ai-fix PR covers its branch.
+          3. fix_single_run fixes it end-to-end (branch, fix, validation,
+             commit, PR).
 
-        Each fix opens an ai-fix PR that covers the fixed branch, so the next
-        scan skips it — the loop terminates. A fix that fails (e.g. validation
-        blocked) stops the loop to avoid retrying the same run forever. The
-        total work per invocation can be capped with fixing.max_per_run /
-        $CI_MAX_FIXES_PER_RUN (unset = fix everything).
+        Returns the fixed CIEvent, or None when there is nothing eligible
+        left or the fix did not complete (the reason is printed).
+        """
+        latest = self.get_latest_failed(repos)
+        if latest is None:
+            print("[FIX-NEXT] no eligible failed CI run (nothing to fix)")
+            return None
+        print(f"Handling failed run {latest.run_id} in {latest.repo} "
+              f"(updated {latest.updated_at}) — {len(repos)} repo(s) scanned, "
+              "one selected to fix")
+        try:
+            ok = self.fix_single_run(latest, repos)
+        except Exception as e:
+            print(f"[ERROR] Failed to remediate run {latest.run_id}: {e}")
+            return None
+        if not ok:
+            print("[FIX-NEXT] fix did not complete (validation blocked or "
+                  "no PR)")
+            return None
+        return latest
+
+    def run_full_remediation(self, repos: List[Dict]) -> bool:
+        """Remediate EVERY eligible failed CI run in one invocation.
+
+        Calls fix_next() in a loop until no eligible failure remains:
+        each fix opens an ai-fix PR that covers the fixed branch, so the next
+        scan skips it and the loop terminates. A fix that fails (e.g.
+        validation blocked) stops the loop to avoid retrying the same run
+        forever. The total work per invocation can be capped with
+        fixing.max_per_run / $CI_MAX_FIXES_PER_RUN (unset = fix everything).
         """
         max_fixes = self._max_fixes_per_run()
         fixed_runs: set = set()
@@ -941,7 +968,7 @@ class CIOrchestrator:
                 print(f"[LOOP] reached max fixes per run ({max_fixes}); "
                       "stopping loop")
                 break
-            latest = self.get_latest_failed(repos)
+            latest = self.fix_next(repos)
             if latest is None:
                 if fixed == 0:
                     print("No failed CI runs found.")
@@ -958,19 +985,6 @@ class CIOrchestrator:
                 # GitHub PR listing is eventually consistent; never re-fix.
                 print(f"[LOOP] run {latest.run_id} was already fixed in this "
                       "invocation; stopping loop")
-                break
-
-            print(f"Handling failed run {latest.run_id} in {latest.repo} "
-                  f"(updated {latest.updated_at}) — {len(repos)} repo(s) "
-                  "scanned, one selected to fix")
-            try:
-                ok = self._fix_single_run(latest, repos)
-            except Exception as e:
-                print(f"[ERROR] Failed to remediate run {latest.run_id}: {e}")
-                break
-            if not ok:
-                print("[LOOP] fix did not complete (validation blocked or "
-                      "no PR); stopping loop")
                 break
             fixed_runs.add(latest.run_id)
             fixed += 1

@@ -331,6 +331,27 @@ class TestLabelResolution(unittest.TestCase):
         o.client = FakeClient()
         self.assertEqual(o._org_repos(), ["RTC12-Test", "AcmeCorp"])
 
+    def test_fix_next_public_one_iteration(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        o = CIOrchestrator(github_token="")
+        ev = CIEvent(repo="RTC12-Test/asd2", run_id=42, workflow_name="W",
+                     job_name="J", broken_branch="f", head_sha="h",
+                     updated_at=_ago(1))
+        fixed = []
+        o.get_latest_failed = lambda repos: ev
+        o.fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
+        got = o.fix_next([{"name": "asd2"}])
+        self.assertEqual(got.run_id, 42)
+        self.assertEqual(fixed, [42])
+        # fix did not complete -> None
+        o.fix_single_run = lambda event, repos: False
+        self.assertIsNone(o.fix_next([{"name": "asd2"}]))
+        # nothing eligible -> None
+        o.get_latest_failed = lambda repos: None
+        self.assertIsNone(o.fix_next([{"name": "asd2"}]))
+
     def test_run_full_remediation_fixes_all_until_none_left(self):
         from engine.orchestrator import CIOrchestrator
         from core.models import CIEvent
@@ -346,7 +367,7 @@ class TestLabelResolution(unittest.TestCase):
         ]
         fixed = []
         o.get_latest_failed = lambda repos: (queue.pop(0) if queue else None)
-        o._fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
+        o.fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
         ok = o.run_full_remediation([{"name": "asd2"}, {"name": "terraform_child"}])
         self.assertTrue(ok)
         self.assertEqual(fixed, [11, 22])
@@ -361,7 +382,7 @@ class TestLabelResolution(unittest.TestCase):
                          updated_at=f"2026-09-16T05:5{i}Z") for i in (1, 2, 3)]
         fixed = []
         o.get_latest_failed = lambda repos: (queue.pop(0) if queue else None)
-        o._fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
+        o.fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
         o.config.setdefault("fixing", {})["max_per_run"] = 2
         ok = o.run_full_remediation([{"name": "r1"}])
         self.assertTrue(ok)
@@ -385,7 +406,7 @@ class TestLabelResolution(unittest.TestCase):
         def flaky_fix(event, repos):
             fixed.append(event.run_id)
             return event.run_id != 2  # second fix blocks (validation failed)
-        o._fix_single_run = flaky_fix
+        o.fix_single_run = flaky_fix
         ok = o.run_full_remediation([{"name": "r1"}])
         self.assertTrue(ok)  # at least one fix completed
         self.assertEqual(fixed, [1, 2])  # loop stopped after the failing fix
