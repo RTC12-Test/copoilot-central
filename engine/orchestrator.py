@@ -283,23 +283,33 @@ class CIOrchestrator:
         return out
 
     def _first_failed_run(self, repo: Dict) -> Optional[CIEvent]:
-        """Return the most recent failed CI run for a single repo (or None).
+        """Return the repo's first (most recent) failed CI run, or None.
 
-        This is the repo's \"first failed CI job\" — the newest failing run.
+        The \"first failed CI job\" is the newest failing run. Runs that already
+        have an open ai-fix PR (the agent is already remediating them) are
+        skipped so the agent moves to the next repo's failure instead of
+        re-selecting an already-handled run.
         """
         events = self.client.list_recent_failed_runs(repo["url"], limit=10)
         failed = sorted((ev for ev in events if ev.conclusion == "failure"),
                         key=lambda ev: ev.updated_at, reverse=True)
-        return failed[0] if failed else None
+        for ev in failed:
+            has_open = getattr(self.client, "has_open_fix_pr", None)
+            if has_open and has_open(repo["url"], ev.broken_branch):
+                print(f"[SCAN] {repo.get('name')}: run {ev.run_id} already has "
+                      f"an open ai-fix PR (branch {ev.broken_branch}); skipping")
+                continue
+            return ev
+        return None
 
     def get_latest_failed(self, repos: List[Dict]) -> Optional[CIEvent]:
         """Find the single CI run to remediate.
 
         Every monitored repo is checked for its first failed CI job (its most
-        recent failing run); those runs become candidates, one per repo. The
-        AI model then selects exactly ONE repo's run to fix. When the model is
-        unavailable or returns nothing, the newest candidate by updated_at wins
-        (previous behavior).
+        recent failing run not already covered by an open ai-fix PR); those
+        runs become candidates, one per repo. The AI model then selects exactly
+        ONE repo's run to fix. When the model is unavailable or returns
+        nothing, the newest candidate by updated_at wins (previous behavior).
         """
         candidates: List[CIEvent] = []
         for repo in repos:
@@ -313,14 +323,15 @@ class CIOrchestrator:
         if not candidates:
             return None
 
-        chosen = self._ai_select_run(candidates)
+        chosen = self._ai_select_run(candidates, repos)
         if chosen is None:
             chosen = max(candidates, key=lambda ev: ev.updated_at)
             print(f"[SELECT-RUN] using latest failed run {chosen.run_id} "
                   f"in {chosen.repo} (updated {chosen.updated_at})")
         return chosen
 
-    def _ai_select_run(self, candidates: List[CIEvent]) -> Optional[CIEvent]:
+    def _ai_select_run(self, candidates: List[CIEvent],
+                       repos: Optional[List[Dict]] = None) -> Optional[CIEvent]:
         """Ask the pluggable model which candidate run to remediate."""
         try:
             if not self.ai_model.is_available():
@@ -328,7 +339,10 @@ class CIOrchestrator:
                 return None
             print(f"[SELECT-RUN] choosing run via '{self.ai_model.name}' "
                   f"({len(candidates)} candidates)...")
-            key = self.ai_model.select_run(candidates, {"orgs": self._org_repos()})
+            key = self.ai_model.select_run(candidates, {
+                "orgs": self._org_repos(),
+                "repos": repos or [],
+            })
             if not key:
                 print("[SELECT-RUN] model returned no selection; using code fallback")
                 return None

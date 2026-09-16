@@ -125,36 +125,57 @@ class CopilotCLIModel(AIModel):
                    context: Optional[Dict] = None) -> Optional[str]:
         """Ask Copilot which failed CI run the agent should remediate next.
 
-        Candidates are the current failed runs (one newest per repo). Copilot
-        picks ONE, returning its key ("org/repo" or "org/repo#run_id"), or None
-        so the caller falls back to the run most recently updated.
+        Candidates are the current failed runs (one newest uncovered per repo).
+        Copilot picks ONE, returning its key ("org/repo" or "org/repo#run_id"),
+        or None so the caller falls back to the run most recently updated.
         """
         if not candidates:
             return None
-        payload = [{
-            "repo": c.repo,
-            "run_id": c.run_id,
-            "workflow": c.workflow_name,
-            "job": c.job_name,
-            "branch": c.broken_branch,
-            "labels": c.labels,
-            "updated_at": c.updated_at,
-        } for c in candidates]
+        repos = context.get("repos") or [] if isinstance(context, dict) else []
+        labels_by_repo = {}
+        for r in repos:
+            name = str(r.get("name", ""))
+            labels_by_repo[name] = r.get("labels", [])
+            labels_by_repo[str(r.get("repo_key", ""))] = r.get("labels", [])
+        for c in candidates:
+            rec = c.repo.split("/")[-1] if "/" in c.repo else c.repo
+            labels_by_repo.setdefault(rec, c.labels or [])
+
+        payload = []
+        for c in candidates:
+            rec = c.repo.split("/")[-1] if "/" in c.repo else c.repo
+            wf = c.workflow_path or c.workflow_name or ""
+            payload.append({
+                "repo": c.repo,
+                "run_id": c.run_id,
+                "workflow": c.workflow_name,
+                "branch": c.broken_branch,
+                "labels": labels_by_repo.get(rec) or labels_by_repo.get(c.repo) or [],
+                "updated_at": c.updated_at,
+                "workflow_path": c.workflow_path,
+            })
+        # newest first: puts the most recent failure at the top of the list
+        payload.sort(key=lambda p: p.get("updated_at") or "", reverse=True)
         prompt = (
             "You are the run-selection step of a CI remediation agent. The "
             "agent auto-fixes ONE failed GitHub Actions run per invocation and "
             "opens exactly one pull request for it.\n"
             "The candidates below are each monitored repo's FIRST failed CI job "
-            "(its most recent failing run) — one candidate per repo. All repos "
-            "were already checked.\n"
-            "SELECT exactly ONE repository's run to remediate now: prefer a "
-            "run whose failure is a genuine code problem (syntax, compilation, "
-            "broken tests, terraform validation) on a project with a ci_* label. "
-            "Avoid already-remediated/duplicate runs and trivial environment "
+            "(its most recent failing run not already covered by an open fix PR) "
+            "— one candidate per repo. All repos were already checked.\n"
+            "AGENT POLICY — LATEST FAILURE FIRST: the agent only remediates the "
+            "most recent CI failure. SELECT the candidate with the most recent "
+            "updated_at (the newest, listed first) unless its failure is clearly "
+            "environmental (network, quota, infra) AND a newer candidate is "
+            "actionable. Do NOT pick an older run when a newer failing run "
+            "exists.\n"
+            "Within that policy, prefer a run whose failure is a genuine code "
+            "problem (syntax, compilation, broken tests, terraform validation) "
+            "on a project with a ci_* label and avoid duplicate/trivial "
             "failures.\n"
             "Reply with ONLY a JSON object, e.g. "
             '{"repo": "org/repo", "run_id": 123}. No prose, no markdown.\n\n'
-            f"CANDIDATES:\n{json.dumps(payload, indent=1)}"
+            f"CANDIDATES (newest first):\n{json.dumps(payload, indent=1)}"
         )
         raw = self._run(prompt)
         return parse_run_selection(raw)
