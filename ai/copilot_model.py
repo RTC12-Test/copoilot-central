@@ -143,8 +143,11 @@ class CopilotCLIModel(AIModel):
         prompt = (
             "You are the run-selection step of a CI remediation agent. The "
             "agent auto-fixes ONE failed GitHub Actions run per invocation and "
-            "opens a pull request for it.\n"
-            "SELECT the single most appropriate run to remediate now: prefer a "
+            "opens exactly one pull request for it.\n"
+            "The candidates below are each monitored repo's FIRST failed CI job "
+            "(its most recent failing run) — one candidate per repo. All repos "
+            "were already checked.\n"
+            "SELECT exactly ONE repository's run to remediate now: prefer a "
             "run whose failure is a genuine code problem (syntax, compilation, "
             "broken tests, terraform validation) on a project with a ci_* label. "
             "Avoid already-remediated/duplicate runs and trivial environment "

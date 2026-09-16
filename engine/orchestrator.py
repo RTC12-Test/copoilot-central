@@ -282,18 +282,34 @@ class CIOrchestrator:
             })
         return out
 
+    def _first_failed_run(self, repo: Dict) -> Optional[CIEvent]:
+        """Return the most recent failed CI run for a single repo (or None).
+
+        This is the repo's \"first failed CI job\" — the newest failing run.
+        """
+        events = self.client.list_recent_failed_runs(repo["url"], limit=10)
+        failed = sorted((ev for ev in events if ev.conclusion == "failure"),
+                        key=lambda ev: ev.updated_at, reverse=True)
+        return failed[0] if failed else None
+
     def get_latest_failed(self, repos: List[Dict]) -> Optional[CIEvent]:
-        """Find the CI run to remediate: code enumerates candidate failed runs
-        (one newest per repo) and the AI model picks one. When the model is
-        unavailable or returns nothing, falls back to the most recently updated
-        failed run (previous behavior).
+        """Find the single CI run to remediate.
+
+        Every monitored repo is checked for its first failed CI job (its most
+        recent failing run); those runs become candidates, one per repo. The
+        AI model then selects exactly ONE repo's run to fix. When the model is
+        unavailable or returns nothing, the newest candidate by updated_at wins
+        (previous behavior).
         """
         candidates: List[CIEvent] = []
         for repo in repos:
-            for ev in self.client.list_recent_failed_runs(repo["url"], limit=10):
-                if ev.conclusion == "failure":
-                    candidates.append(ev)
-                    break
+            first = self._first_failed_run(repo)
+            if first is None:
+                print(f"[SCAN] {repo.get('name')}: no failed CI runs")
+                continue
+            print(f"[SCAN] {repo.get('name')}: first failed run {first.run_id} "
+                  f"(updated {first.updated_at})")
+            candidates.append(first)
         if not candidates:
             return None
 
@@ -714,10 +730,10 @@ class CIOrchestrator:
     def run_full_remediation(self, repos: List[Dict]) -> bool:
         """Main remediation workflow — remediates ONE failed CI run.
 
-        The failed-run candidates are enumerated per repo; the AI model selects
-        which run to fix (latest-by-updated_at is the code fallback), so each
-        invocation handles a single failure instead of re-processing every
-        older failure.
+        Every monitored repo is checked for its first failed CI job; the AI
+        model then selects exactly one of those runs to fix (fallback: newest
+        by updated_at), so each invocation handles a single failure instead of
+        re-processing every older failure across all repos.
         """
         latest = self.get_latest_failed(repos)
         if not latest:
@@ -728,8 +744,9 @@ class CIOrchestrator:
                   " name (ci_* labels determine the technology, not the repo name).")
             return False
 
-        print(f"Handling latest failed run {latest.run_id} in {latest.repo} "
-              f"(updated {latest.updated_at}) across {len(repos)} repo(s)")
+        print(f"Handling first failed run {latest.run_id} in {latest.repo} "
+              f"(updated {latest.updated_at}) — {len(repos)} repo(s) scanned, "
+              "one selected to fix")
         try:
             return self._fix_single_run(latest, repos)
         except Exception as e:
