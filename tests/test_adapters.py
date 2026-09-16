@@ -15,6 +15,13 @@ def make_event(repo="test-repo", run_id=1, branch="feature/test", logs=""):
     )
 
 
+def _ago(hours):
+    """ISO timestamp `hours` before now (UTC) for run-selection fixtures."""
+    from datetime import datetime, timezone, timedelta
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
 class BaseAdapterTest(unittest.TestCase):
     """Shared helpers for adapter tests."""
     def assert_failure_analysis(self, adapter, logs, expected_category):
@@ -390,6 +397,46 @@ class TestLabelResolution(unittest.TestCase):
         o.get_latest_failed = lambda repos: None
         self.assertFalse(o.run_full_remediation([{"name": "r1"}]))
 
+    def test_run_window_excludes_stale_failures(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+        from datetime import datetime, timezone, timedelta
+
+        stale = CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                        job_name="J", broken_branch="f", head_sha="a",
+                        updated_at=(datetime.now(timezone.utc)
+                                    - timedelta(days=6)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+        class FakeClient:
+            def list_recent_failed_runs(self, url, limit):
+                return [stale]
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        self.assertIsNone(o._first_failed_run({"name": "asd2", "url": "u1"}))
+
+    def test_run_window_keeps_recent_failure(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+        from datetime import datetime, timezone, timedelta
+
+        fresh = CIEvent(repo="RTC12-Test/asd2", run_id=22, workflow_name="W",
+                        job_name="J", broken_branch="f", head_sha="a",
+                        updated_at=(datetime.now(timezone.utc)
+                                    - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+        class FakeClient:
+            def list_recent_failed_runs(self, url, limit):
+                return [fresh]
+            def list_open_fix_pr_bases(self, url):
+                return set()
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        ev = o._first_failed_run({"name": "asd2", "url": "u1"})
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev.run_id, 22)
+
     def test_run_selection_ai_picks_run(self):
         from engine.orchestrator import CIOrchestrator
 
@@ -402,11 +449,11 @@ class TestLabelResolution(unittest.TestCase):
                     return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="a",
-                                    updated_at="2026-09-14T06:30:00Z")]
+                                    updated_at=_ago(2))]
                 return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
                                 workflow_name="W", job_name="J",
                                 broken_branch="main", head_sha="b",
-                                updated_at="2026-09-14T06:31:00Z")]
+                                updated_at=_ago(1))]
 
         class AiModel:
             name = "fake"
@@ -435,11 +482,11 @@ class TestLabelResolution(unittest.TestCase):
                     return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="a",
-                                    updated_at="2026-09-14T06:30:00Z")]
+                                    updated_at=_ago(2))]
                 return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
                                 workflow_name="W", job_name="J",
                                 broken_branch="main", head_sha="b",
-                                updated_at="2026-09-14T06:31:00Z")]
+                                updated_at=_ago(1))]
 
         class AiModel:
             name = "fake"
@@ -464,7 +511,7 @@ class TestLabelResolution(unittest.TestCase):
             def list_recent_failed_runs(self, url, limit):
                 return [CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
                                 job_name="J", broken_branch="main", head_sha="a",
-                                updated_at="2026-09-14T06:30:00Z")]
+                                updated_at=_ago(2))]
 
         class AiModel:
             name = "fake"
@@ -493,11 +540,11 @@ class TestLabelResolution(unittest.TestCase):
                     return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="a",
-                                    updated_at="2026-09-14T06:30:00Z")]
+                                    updated_at=_ago(2))]
                 return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
                                 workflow_name="W", job_name="J",
                                 broken_branch="main", head_sha="b",
-                                updated_at="2026-09-14T06:31:00Z")]
+                                updated_at=_ago(1))]
 
         class AiModel:
             name = "fake"
@@ -534,11 +581,11 @@ class TestLabelResolution(unittest.TestCase):
                     return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="a",
-                                    updated_at="2026-09-14T06:30:00Z")]
+                                    updated_at=_ago(2))]
                 return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
                                 workflow_name="W", job_name="J",
                                 broken_branch="main", head_sha="b",
-                                updated_at="2026-09-14T06:31:00Z")]
+                                updated_at=_ago(1))]
 
         class AiModel:
             name = "fake"
@@ -565,7 +612,7 @@ class TestLabelResolution(unittest.TestCase):
                 return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                 workflow_name="W", job_name="J",
                                 broken_branch="main", head_sha="a",
-                                updated_at="2026-09-14T06:30:00Z")]
+                                updated_at=_ago(2))]
 
         class AiModel:
             name = "fake"
@@ -705,12 +752,12 @@ class TestLabelResolution(unittest.TestCase):
                     return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="a",
-                                    updated_at="2026-09-14T06:30:00Z")]
+                                    updated_at=_ago(2))]
                 if url == "u2":
                     return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
                                     workflow_name="W", job_name="J",
                                     broken_branch="main", head_sha="b",
-                                    updated_at="2026-09-14T06:31:00Z")]
+                                    updated_at=_ago(1))]
                 return []  # repo with no failed runs
 
         class AiModel:

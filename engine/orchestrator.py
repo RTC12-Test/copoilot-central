@@ -3,6 +3,7 @@ import json
 import time
 import tempfile
 import subprocess
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 
@@ -331,19 +332,62 @@ class CIOrchestrator:
             })
         return out
 
+    def _run_window_hours(self) -> int:
+        """Recency window for the failing runs the agent will fix (hours).
+
+        Priority: $CI_RUN_WINDOW_HOURS > config monitoring.run_window_hours
+        > default 24 (mirrors the discovery push window). Failures updated
+        before now-<window> are left untouched even if unremediated.
+        """
+        env = os.environ.get("CI_RUN_WINDOW_HOURS", "").strip()
+        if env:
+            try:
+                v = int(env)
+                return v if v > 0 else 24
+            except ValueError:
+                pass
+        monitoring = self.config.get("monitoring") or {}
+        try:
+            v = int(monitoring.get("run_window_hours", 24))
+            return v if v > 0 else 24
+        except (TypeError, ValueError):
+            return 24
+
+    def _within_window(self, updated_at: str, hours: int) -> bool:
+        """Whether a run update is inside the recency window.
+
+        Unparseable timestamps are kept (never silently dropped).
+        """
+        try:
+            dt = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return True
+        return (datetime.now(timezone.utc) - dt).total_seconds() <= hours * 3600
+
     def _first_failed_run(self, repo: Dict) -> Optional[CIEvent]:
         """Return the repo's first (most recent) failed CI run, or None.
 
-        The \"first failed CI job\" is the newest failing run. Runs that already
-        have an open ai-fix PR (the agent is already remediating them) are
-        skipped so the agent moves to the next repo's failure instead of
-        re-selecting an already-handled run. Open-PR data is fetched once per
-        repo (batched) when the client supports it.
+        The \"first failed CI job\" is the newest failing run within the
+        recency window (see _run_window_hours): failures older than the window
+        are not remediated, even if unremediated. Runs that already have an
+        open ai-fix PR (the agent is already remediating them) are skipped so
+        the agent moves to the next repo's failure instead of re-selecting an
+        already-handled run. Open-PR data is fetched once per repo (batched)
+        when the client supports it.
         """
         events = self.client.list_recent_failed_runs(repo["url"], limit=10)
-        failed = sorted((ev for ev in events if ev.conclusion == "failure"),
-                        key=lambda ev: ev.updated_at, reverse=True)
+        all_failed = [ev for ev in events if ev.conclusion == "failure"]
+        if not all_failed:
+            return None
+        window_h = self._run_window_hours()
+        failed = sorted(
+            (ev for ev in all_failed if self._within_window(ev.updated_at, window_h)),
+            key=lambda ev: ev.updated_at, reverse=True)
         if not failed:
+            newest = max(all_failed, key=lambda ev: ev.updated_at)
+            print(f"[SCAN] {repo.get('name')}: no failed CI runs within the "
+                  f"{window_h}h window (newest failure {newest.updated_at});"
+                  " skipping")
             return None
         covered = set()
         has_batch = hasattr(self.client, "list_open_fix_pr_bases")
@@ -368,11 +412,12 @@ class CIOrchestrator:
         """Find the single CI run to remediate.
 
         Every monitored repo is checked for its first failed CI job (its most
-        recent failing run not already covered by an open ai-fix PR); those
-        runs become candidates, one per repo. Repos are scanned in parallel.
-        When exactly one candidate exists it is taken directly (no model call);
-        otherwise the AI model selects exactly ONE repo's run to fix, with the
-        newest candidate by updated_at as the code fallback.
+        recent failing run within the recency window, not already covered by an
+        open ai-fix PR); those runs become candidates, one per repo. Repos are
+        scanned in parallel. When exactly one candidate exists it is taken
+        directly (no model call); otherwise the AI model selects exactly ONE
+        repo's run to fix, with the newest candidate by updated_at as the code
+        fallback.
         """
         if not repos:
             return None
@@ -906,8 +951,8 @@ class CIOrchestrator:
                           "config/ci_remediation.yaml and may use any name "
                           "(ci_* labels determine the technology, not the name).")
                 else:
-                    print(f"[LOOP] no more failed CI runs; fixed {fixed} run(s) "
-                          "in this invocation")
+                    print(f"[LOOP] no more failed CI runs within the window; "
+                          f"fixed {fixed} run(s) in this invocation")
                 return fixed > 0
             if latest.run_id in fixed_runs:
                 # GitHub PR listing is eventually consistent; never re-fix.

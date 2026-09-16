@@ -71,6 +71,11 @@ fixing:
 monitoring:
   provider: heuristic   # heuristic | ai
   repo_selection: ai   # ai | heuristic
+  # run_window_hours: the agent only fixes failures UPDATED within this many
+  #   hours (default 24, mirrors the discovery push window). Older failures
+  #   are left untouched even if unremediated, so a loop run stops once the
+  #   last 24h of failures are handled instead of digging into history.
+  #   Runtime override: CI_RUN_WINDOW_HOURS.
 
 # Uncomment to pin organizations (otherwise derived from the token):
 # organizations:
