@@ -558,6 +558,71 @@ class TestLabelResolution(unittest.TestCase):
         self.assertEqual(sorted(x["name"] for x in r2),
                          ["asd2", "terraform_child"])
 
+    def test_fix_analysis_skips_ai_when_heuristic_root_cause(self):
+        from types import SimpleNamespace
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        ev = CIEvent(repo="RTC12-Test/asd2", run_id=7, workflow_name="W",
+                     job_name="J", broken_branch="f", head_sha="h")
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def analyze_logs(self, logs, context=None):
+                raise AssertionError("AI analyze must be skipped when "
+                                     "heuristic root cause exists")
+
+        o = CIOrchestrator(github_token="")
+        o.ai_model = AiModel()
+        got = o._resolve_fix_analysis(
+            SimpleNamespace(root_cause="TF init failed"), "logs", {}, ev, "terraform")
+        self.assertEqual(got, "TF init failed")
+
+        # fallback: heuristic found nothing -> AI analysis is used
+        class AiModel2:
+            name = "fake"
+            def is_available(self): return True
+            def analyze_logs(self, logs, context=None):
+                return "AI analysis result"
+
+        o2 = CIOrchestrator(github_token="")
+        o2.ai_model = AiModel2()
+        got2 = o2._resolve_fix_analysis(
+            SimpleNamespace(root_cause=""), "logs", {}, ev, "terraform")
+        self.assertEqual(got2, "AI analysis result")
+
+    def test_pr_content_template_by_default_no_model_call(self):
+        from engine.orchestrator import CIOrchestrator
+        from adapters.base import FixPlan
+        from core.models import CIEvent
+
+        calls = {}
+
+        class FakeClient:
+            def create_pull_request(self, **kw):
+                calls.update(kw)
+                return "https://github.com/pr/1"
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def create_pr_content(self, *a, **k):
+                raise AssertionError("AI PR drafting must be skipped by default")
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        plan = FixPlan(tech="unknown", root_cause="broken block",
+                       files=["main.tf"], changes={"main.tf": "x"})
+        ev = CIEvent(repo="RTC12-Test/asd2", run_id=7, workflow_name="W",
+                     job_name="J", broken_branch="f", head_sha="h")
+        url = o.create_pr({"name": "asd2", "url": "u"}, ev, 7,
+                          "ai-fix/unknown-7", "f", "msg", plan)
+        self.assertEqual(url, "https://github.com/pr/1")
+        self.assertEqual(calls["base"], "f")
+        self.assertIn("Automated CI Remediation", calls["body"])
+
     def test_run_selection_scans_all_repos_and_skips_clean_ones(self):
         from engine.orchestrator import CIOrchestrator
         from core.models import CIEvent

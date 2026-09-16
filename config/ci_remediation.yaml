@@ -52,6 +52,15 @@
 # Can also be overridden at runtime via CI_FIX_ENGINE.
 # Note: adapters are ALWAYS still used for validation commands (build/test/check).
 
+# `creating.pr_content` selects who writes the PR title/body:
+#   template -> deterministic PR from the fix plan (root cause, files, run info);
+#               fast, no model call (default).
+#   ai       -> the pluggable AI model drafts the PR prose (~40s slower per PR).
+# Can also be overridden at runtime via CI_PR_CONTENT (template | ai).
+
+creating:
+  pr_content: template   # template | ai
+
 fixing:
   engine: ai   # ai | adapter
 

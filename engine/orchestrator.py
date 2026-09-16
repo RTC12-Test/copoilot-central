@@ -533,12 +533,24 @@ class CIOrchestrator:
         """Commit changes, stage, and push the fix branch."""
         return self.repo_manager.commit_and_push(workspace, fix_branch, commit_msg, files=files)
 
+    def _pr_content_ai(self) -> bool:
+        """Whether PR title/body are drafted by the AI model.
+
+        Priority: $CI_PR_CONTENT > config creating.pr_content > 'template'.
+        'template' builds the PR from the plan deterministically (fast); 'ai'
+        asks the model to draft it (nicer prose, ~40s slower per PR).
+        """
+        creating = self.config.get("creating") or {}
+        return (os.environ.get("CI_PR_CONTENT")
+                or creating.get("pr_content")
+                or "template").lower() == "ai"
+
     def create_pr(self, repo: Dict, event: CIEvent, run_id: int, fix_branch: str, base: str, commit_msg: str, plan: FixPlan) -> Optional[str]:
         """Create a PR targeting the broken branch.
 
-        The PR title + body are drafted/corrected by the pluggable model
-        (e.g. GitHub Copilot CLI) when available; otherwise the adapter builds
-        them heuristically.
+        The PR title + body come from the deterministic template by default
+        (fast). Set $CI_PR_CONTENT=ai (or config creating.pr_content: ai) to
+        have the pluggable model draft them instead.
         """
         try:
             adapter = get_adapter(plan.tech)
@@ -563,24 +575,28 @@ class CIOrchestrator:
             )
         else:
             body = adapter.build_pr_body(event, None, plan)
-        try:
-            if self.ai_model.is_available():
-                print(f"[PR] drafting PR content with '{self.ai_model.name}'...")
-                ai_title, ai_body = self.ai_model.create_pr_content(
-                    plan, event, {
-                        "repo": event.repo,
-                        "branch": event.broken_branch,
-                        "tech": plan.tech,
-                        "category": getattr(plan, "error_category", ""),
-                    })
-                if ai_title:
-                    title = ai_title
-                if ai_body:
-                    body = ai_body
-            else:
-                print("[PR] model unavailable; using adapter-built PR content")
-        except Exception as e:
-            print(f"[PR] AI drafting failed; using adapter PR content: {e}")
+        if self._pr_content_ai():
+            try:
+                if self.ai_model.is_available():
+                    print(f"[PR] drafting PR content with '{self.ai_model.name}'...")
+                    ai_title, ai_body = self.ai_model.create_pr_content(
+                        plan, event, {
+                            "repo": event.repo,
+                            "branch": event.broken_branch,
+                            "tech": plan.tech,
+                            "category": getattr(plan, "error_category", ""),
+                        })
+                    if ai_title:
+                        title = ai_title
+                    if ai_body:
+                        body = ai_body
+                else:
+                    print("[PR] model unavailable; using template PR content")
+            except Exception as e:
+                print(f"[PR] AI drafting failed; using template PR content: {e}")
+        else:
+            print("[PR] using template PR content "
+                  "(set CI_PR_CONTENT=ai for model-drafted)")
         pr_url = self.client.create_pull_request(
             repo=repo["url"],
             base=base,
@@ -670,6 +686,21 @@ class CIOrchestrator:
             print(f"[AI] analysis failed, falling back to heuristics: {e}")
             return None
 
+    def _resolve_fix_analysis(self, monitor_analysis, logs: str, repo: Dict,
+                              event: CIEvent, techs_str: str) -> str:
+        """Root cause used to guide the fix.
+
+        The heuristic monitor's root cause is sufficient and is used directly
+        (skipping the slow AI analysis call). Only when the heuristic found
+        nothing do we ask the AI model for a root cause.
+        """
+        if monitor_analysis.root_cause:
+            print("[ANALYZE] using heuristic root cause "
+                  "(AI log analysis skipped for speed)")
+            return monitor_analysis.root_cause
+        ai_analysis = self._ai_analyze(logs, repo, event, techs_str)
+        return ai_analysis or "Unknown CI failure"
+
     def _ai_suggest_fix(self, plan: FixPlan, repo: Dict, event: CIEvent, tech: str,
                         repo_files: Dict[str, str]) -> FixPlan:
         """Use the pluggable AI model to refine fix content for each file."""
@@ -733,10 +764,10 @@ class CIOrchestrator:
         if monitor_analysis.root_cause:
             print(f"[MONITOR] root cause: {monitor_analysis.root_cause[:300]}")
 
-        ai_analysis = self._ai_analyze(logs, repo, latest, techs_str)
-        if ai_analysis:
-            print(f"[AI] Root cause: {ai_analysis[:300]}")
-        fix_analysis = monitor_analysis.root_cause or ai_analysis or "Unknown CI failure"
+        fix_analysis = self._resolve_fix_analysis(
+            monitor_analysis, logs, repo, latest, techs_str)
+        if not monitor_analysis.root_cause:
+            print(f"[AI] Root cause: {fix_analysis[:300]}")
 
         print("Creating fix branch...")
         workspace, fix_branch = self.create_fix_branch(repo["url"], broken_branch, run_id, tech)
@@ -786,9 +817,16 @@ class CIOrchestrator:
 
         print("Validating fix...")
         validations = []
-        for t in dict.fromkeys(techs):
-            validation = self.validate_fix(workspace, plan, t)
-            validations.append((t, validation))
+        techs_uniq = list(dict.fromkeys(techs))
+        if len(techs_uniq) > 1:
+            with ThreadPoolExecutor(max_workers=len(techs_uniq)) as pool:
+                validations = list(pool.map(
+                    lambda t: (t, self.validate_fix(workspace, plan, t)),
+                    techs_uniq))
+        else:
+            validations = [(t, self.validate_fix(workspace, plan, t))
+                           for t in techs_uniq]
+        for t, validation in validations:
             print(f"[VALIDATE] {t}: {'passed' if validation.passed else 'FAILED'}")
             if not validation.passed:
                 print(f"  {validation.output}")
