@@ -324,6 +324,73 @@ class TestLabelResolution(unittest.TestCase):
         o.client = FakeClient()
         self.assertEqual(o._org_repos(), ["RTC12-Test", "AcmeCorp"])
 
+    def test_run_selection_priority_repo_wins_without_model_call(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+        from types import SimpleNamespace
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                if url == "u1":
+                    return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
+                                    workflow_name="W", job_name="J",
+                                    broken_branch="f", head_sha="a",
+                                    updated_at="2026-09-16T05:57:45Z")]
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="e", head_sha="b",
+                                updated_at="2026-09-16T05:58:17Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                raise AssertionError("model selection must be skipped when "
+                                     "a priority repo has an eligible failure")
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        # newer run is in terraform_child (22); priority makes asd2 win anyway
+        o.config.setdefault("selection", {})["priority_repos"] = ["asd2"]
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"},
+                                      {"name": "terraform_child", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 11)
+        self.assertEqual(chosen.repo, "RTC12-Test/asd2")
+
+    def test_run_selection_priority_falls_back_when_no_priority_failure(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                if url == "u1":
+                    return []  # priority repo: no failures at all
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="e", head_sha="b",
+                                updated_at="2026-09-16T05:58:17Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                return "RTC12-Test/terraform_child#22"
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        o.config.setdefault("selection", {})["priority_repos"] = ["asd2"]
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"},
+                                      {"name": "terraform_child", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 22)
+
     def test_run_selection_ai_picks_run(self):
         from engine.orchestrator import CIOrchestrator
 

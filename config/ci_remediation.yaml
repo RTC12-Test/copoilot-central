@@ -61,6 +61,16 @@
 creating:
   pr_content: template   # template | ai
 
+# `selection.priority_repos` (OPTIONAL): repo(s) to remediate FIRST when they
+# have an eligible failing run (i.e. not already covered by an open ai-fix PR).
+# The newest failing run among them is fixed directly, skipping the AI selection
+# call. When none of them has an eligible failure, normal selection resumes.
+# Entries may be 'org/name' or just 'name'. Runtime override: CI_PRIORITY_REPO
+# (comma-separated). Leave empty for pure newest-failure-first selection.
+selection:
+  priority_repos: []
+  # e.g. priority_repos: [asd2]   # or RTC12-Test/asd2
+
 fixing:
   engine: ai   # ai | adapter
 
