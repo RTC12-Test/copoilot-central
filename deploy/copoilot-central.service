@@ -1,0 +1,35 @@
+# systemd unit for the Central CI Remediation Agent (copoilot-central).
+#
+# Install:
+#   sudo cp deploy/copoilot-central.service /etc/systemd/system/
+#   sudo mkdir -p /etc                # /etc/copoilot-central.env lives here
+#   echo 'GITHUB_TOKEN=<token>' | sudo tee /etc/copoilot-central.env >/dev/null
+#   sudo chmod 600 /etc/copoilot-central.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now copoilot-central
+#
+# Check status / logs:
+#   systemctl status copoilot-central
+#   journalctl -u copoilot-central -f
+#   tail -f /var/log/agent.log
+#
+# The service runs `main.py --watch` (continuous agent mode) forever,
+# restarting automatically if it crashes. `WorkingDirectory` must point at
+# this repository checkout.
+
+[Unit]
+Description=Central CI Remediation Agent (copoilot-central)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ghost
+WorkingDirectory=/home/ghost/Documents/copilot/agent/copoilot-central
+ExecStart=/usr/bin/python3 /home/ghost/Documents/copilot/agent/copoilot-central/main.py --watch
+EnvironmentFile=-/etc/copoilot-central.env
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

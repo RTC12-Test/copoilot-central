@@ -58,6 +58,18 @@
 #   ai       -> the pluggable AI model drafts the PR prose (~40s slower per PR).
 # Can also be overridden at runtime via CI_PR_CONTENT (template | ai).
 
+# `agent.*` configures the CONTINUOUS (agent/daemon) mode:
+#   poll_interval_seconds: seconds between full remediation passes while
+#     watching. Default 300. CLI --interval / $CI_POLL_INTERVAL_SECONDS win.
+#   log_file: where every agent message is appended, alongside the console.
+#     Default /var/log/agent.log. CLI --log / $CI_AGENT_LOG win.
+# One-shot mode stays `python main.py <token>`; add --watch (or --interval)
+# to keep running 24/7 as an agent (stops gracefully on SIGTERM/SIGINT).
+# For a managed service use deploy/copoilot-central.service (systemd).
+agent:
+  poll_interval_seconds: 300
+  log_file: /var/log/agent.log
+
 creating:
   pr_content: template   # template | ai
 
