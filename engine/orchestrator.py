@@ -364,24 +364,6 @@ class CIOrchestrator:
             return ev
         return None
 
-    def _priority_repos(self) -> List[str]:
-        """Configured repo(s) that get remediation priority (empty = none).
-
-        Priority: $CI_PRIORITY_REPO (comma-separated) > config
-        selection.priority_repos. Entries may be 'org/name' or just 'name'.
-        This is configuration, not code — nothing is hardcoded.
-        """
-        env = os.environ.get("CI_PRIORITY_REPO", "").strip()
-        if env:
-            return [p.strip() for p in env.split(",") if p.strip()]
-        selection = self.config.get("selection") or {}
-        return [p for p in selection.get("priority_repos", []) if p]
-
-    def _repo_in_priority(self, repo_full: str, priority: List[str]) -> bool:
-        """Whether a candidate's repo (org/name) matches a priority entry."""
-        short = repo_full.split("/")[-1]
-        return any(p == repo_full or p == short for p in priority)
-
     def get_latest_failed(self, repos: List[Dict]) -> Optional[CIEvent]:
         """Find the single CI run to remediate.
 
@@ -391,11 +373,6 @@ class CIOrchestrator:
         When exactly one candidate exists it is taken directly (no model call);
         otherwise the AI model selects exactly ONE repo's run to fix, with the
         newest candidate by updated_at as the code fallback.
-
-        If priority repo(s) are configured (selection.priority_repos /
-        $CI_PRIORITY_REPO), eligible candidates from those repos win directly:
-        the newest of them is chosen without a model call. When none of them
-        has an eligible failure, normal selection resumes.
         """
         if not repos:
             return None
@@ -415,18 +392,6 @@ class CIOrchestrator:
             print(f"[SELECT-RUN] single candidate {candidates[0].run_id} in "
                   f"{candidates[0].repo}; skipping model selection")
             return candidates[0]
-
-        priority = self._priority_repos()
-        if priority:
-            prio = [c for c in candidates if self._repo_in_priority(c.repo, priority)]
-            if prio:
-                chosen = max(prio, key=lambda ev: ev.updated_at)
-                print(f"[SELECT-RUN] priority repo(s) {sorted(priority)}: "
-                      f"using newest failed run {chosen.run_id} in {chosen.repo} "
-                      f"(updated {chosen.updated_at}); skipping model selection")
-                return chosen
-            print(f"[SELECT-RUN] no eligible failed run in priority repo(s) "
-                  f"{sorted(priority)}; using normal selection")
 
         chosen = self._ai_select_run(candidates, repos)
         if chosen is None:
