@@ -324,6 +324,72 @@ class TestLabelResolution(unittest.TestCase):
         o.client = FakeClient()
         self.assertEqual(o._org_repos(), ["RTC12-Test", "AcmeCorp"])
 
+    def test_run_full_remediation_fixes_all_until_none_left(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        o = CIOrchestrator(github_token="")
+        queue = [
+            CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                    job_name="J", broken_branch="f", head_sha="a",
+                    updated_at="2026-09-16T05:57:45Z"),
+            CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                    workflow_name="W", job_name="J", broken_branch="e",
+                    head_sha="b", updated_at="2026-09-16T05:58:17Z"),
+        ]
+        fixed = []
+        o.get_latest_failed = lambda repos: (queue.pop(0) if queue else None)
+        o._fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
+        ok = o.run_full_remediation([{"name": "asd2"}, {"name": "terraform_child"}])
+        self.assertTrue(ok)
+        self.assertEqual(fixed, [11, 22])
+
+    def test_run_full_remediation_respects_max_per_run(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        o = CIOrchestrator(github_token="")
+        queue = [CIEvent(repo=f"org/r{i}", run_id=i, workflow_name="W",
+                         job_name="J", broken_branch="b", head_sha="h",
+                         updated_at=f"2026-09-16T05:5{i}Z") for i in (1, 2, 3)]
+        fixed = []
+        o.get_latest_failed = lambda repos: (queue.pop(0) if queue else None)
+        o._fix_single_run = lambda event, repos: fixed.append(event.run_id) or True
+        o.config.setdefault("fixing", {})["max_per_run"] = 2
+        ok = o.run_full_remediation([{"name": "r1"}])
+        self.assertTrue(ok)
+        self.assertEqual(fixed, [1, 2])  # third run left for a later invocation
+
+    def test_run_full_remediation_stops_on_failed_fix(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        o = CIOrchestrator(github_token="")
+        queue = [
+            CIEvent(repo="org/r1", run_id=1, workflow_name="W", job_name="J",
+                    broken_branch="b", head_sha="h",
+                    updated_at="2026-09-16T05:51Z"),
+            CIEvent(repo="org/r2", run_id=2, workflow_name="W", job_name="J",
+                    broken_branch="b", head_sha="h",
+                    updated_at="2026-09-16T05:52Z"),
+        ]
+        fixed = []
+        o.get_latest_failed = lambda repos: (queue.pop(0) if queue else None)
+        def flaky_fix(event, repos):
+            fixed.append(event.run_id)
+            return event.run_id != 2  # second fix blocks (validation failed)
+        o._fix_single_run = flaky_fix
+        ok = o.run_full_remediation([{"name": "r1"}])
+        self.assertTrue(ok)  # at least one fix completed
+        self.assertEqual(fixed, [1, 2])  # loop stopped after the failing fix
+
+    def test_run_full_remediation_no_failures_returns_false(self):
+        from engine.orchestrator import CIOrchestrator
+
+        o = CIOrchestrator(github_token="")
+        o.get_latest_failed = lambda repos: None
+        self.assertFalse(o.run_full_remediation([{"name": "r1"}]))
+
     def test_run_selection_ai_picks_run(self):
         from engine.orchestrator import CIOrchestrator
 

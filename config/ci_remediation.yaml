@@ -63,6 +63,10 @@ creating:
 
 fixing:
   engine: ai   # ai | adapter
+  # max_per_run: optional upper bound on how many failed runs are fixed in a
+  #   single invocation (unset/0 = fix EVERY eligible failure, looping until
+  #   none remain; each fix opens an ai-fix PR so its branch is skipped next).
+  #   Runtime override: CI_MAX_FIXES_PER_RUN.
 
 monitoring:
   provider: heuristic   # heuristic | ai

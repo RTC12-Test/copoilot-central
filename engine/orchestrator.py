@@ -849,28 +849,84 @@ class CIOrchestrator:
             print("Could not create PR")
         return True
 
-    def run_full_remediation(self, repos: List[Dict]) -> bool:
-        """Main remediation workflow — remediates ONE failed CI run.
+    def _max_fixes_per_run(self) -> Optional[int]:
+        """Upper bound on fixes per invocation (None = unlimited).
 
-        Every monitored repo is checked for its first failed CI job; the AI
-        model then selects exactly one of those runs to fix (fallback: newest
-        by updated_at), so each invocation handles a single failure instead of
-        re-processing every older failure across all repos.
+        Priority: $CI_MAX_FIXES_PER_RUN > config fixing.max_per_run.
+        Unset, '0', or negative values mean unlimited (no cap).
         """
-        latest = self.get_latest_failed(repos)
-        if not latest:
-            print("No failed CI runs found.")
-            print("Tip: ensure GITHUB_TOKEN is set and valid, and that the child"
-                  " repositories are accessible to the token. Repositories are"
-                  " discovered from config/ci_remediation.yaml and may use any"
-                  " name (ci_* labels determine the technology, not the repo name).")
-            return False
+        vals = []
+        env = os.environ.get("CI_MAX_FIXES_PER_RUN", "").strip()
+        if env:
+            vals.append(env)
+        fixing = self.config.get("fixing") or {}
+        if fixing.get("max_per_run") is not None:
+            vals.append(str(fixing.get("max_per_run")))
+        for v in vals:
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                return n
+        return None
 
-        print(f"Handling first failed run {latest.run_id} in {latest.repo} "
-              f"(updated {latest.updated_at}) — {len(repos)} repo(s) scanned, "
-              "one selected to fix")
-        try:
-            return self._fix_single_run(latest, repos)
-        except Exception as e:
-            print(f"[ERROR] Failed to remediate run {latest.run_id}: {e}")
-            return False
+    def run_full_remediation(self, repos: List[Dict]) -> bool:
+        """Remediate EVERY eligible failed CI run across all monitored repos.
+
+        Loops until no eligible failure remains:
+          1. Every monitored repo is checked for its first failed CI job (its
+             newest failing run not covered by an open ai-fix PR) -> one
+             candidate per repo.
+          2. The AI model selects exactly one of those runs to fix (fallback:
+             newest by updated_at; a single candidate skips the model call).
+          3. The selected run is fixed and an open ai-fix PR covers its branch.
+
+        Each fix opens an ai-fix PR that covers the fixed branch, so the next
+        scan skips it — the loop terminates. A fix that fails (e.g. validation
+        blocked) stops the loop to avoid retrying the same run forever. The
+        total work per invocation can be capped with fixing.max_per_run /
+        $CI_MAX_FIXES_PER_RUN (unset = fix everything).
+        """
+        max_fixes = self._max_fixes_per_run()
+        fixed_runs: set = set()
+        fixed = 0
+        while True:
+            if max_fixes is not None and fixed >= max_fixes:
+                print(f"[LOOP] reached max fixes per run ({max_fixes}); "
+                      "stopping loop")
+                break
+            latest = self.get_latest_failed(repos)
+            if latest is None:
+                if fixed == 0:
+                    print("No failed CI runs found.")
+                    print("Tip: ensure GITHUB_TOKEN is set and valid, and that "
+                          "the child repositories are accessible to the token. "
+                          "Repositories are discovered from "
+                          "config/ci_remediation.yaml and may use any name "
+                          "(ci_* labels determine the technology, not the name).")
+                else:
+                    print(f"[LOOP] no more failed CI runs; fixed {fixed} run(s) "
+                          "in this invocation")
+                return fixed > 0
+            if latest.run_id in fixed_runs:
+                # GitHub PR listing is eventually consistent; never re-fix.
+                print(f"[LOOP] run {latest.run_id} was already fixed in this "
+                      "invocation; stopping loop")
+                break
+
+            print(f"Handling failed run {latest.run_id} in {latest.repo} "
+                  f"(updated {latest.updated_at}) — {len(repos)} repo(s) "
+                  "scanned, one selected to fix")
+            try:
+                ok = self._fix_single_run(latest, repos)
+            except Exception as e:
+                print(f"[ERROR] Failed to remediate run {latest.run_id}: {e}")
+                break
+            if not ok:
+                print("[LOOP] fix did not complete (validation blocked or "
+                      "no PR); stopping loop")
+                break
+            fixed_runs.add(latest.run_id)
+            fixed += 1
+        return fixed > 0
