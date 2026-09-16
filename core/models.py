@@ -42,15 +42,4 @@ class ErrorContext:
     extra_details: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class FixResult:
-    success: bool
-    tech: str
-    broken_branch: str
-    fix_branch: str
-    files_modified: List[str] = field(default_factory=list)
-    root_cause: str = ""
-    fix_description: str = ""
-    verification_output: str = ""
-    pr_url: Optional[str] = None
-    error_message: Optional[str] = None
+

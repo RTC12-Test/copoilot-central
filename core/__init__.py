@@ -1,3 +1,3 @@
-from .models import CIEvent, ErrorContext, FailureCategory, FixResult
+from .models import CIEvent, ErrorContext, FailureCategory
 
-__all__ = ["CIEvent", "ErrorContext", "FailureCategory", "FixResult"]
+__all__ = ["CIEvent", "ErrorContext", "FailureCategory"]

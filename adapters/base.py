@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from core.models import CIEvent, ErrorContext, FixResult, FailureCategory
+from core.models import CIEvent, ErrorContext, FailureCategory
 
 
 @dataclass

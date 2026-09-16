@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
-from .models import CIEvent, ErrorContext
+from .models import CIEvent
 
 
 class GitHubClient:
@@ -109,23 +109,6 @@ class GitHubClient:
         except Exception as e:
             return f"[Error fetching logs via REST API: {e}]"
 
-    def get_repo_labels(self, repo: str, pull_number: Optional[int] = None) -> List[str]:
-        """Fetch PR or repository topic/issue labels."""
-        repo_clean = repo.replace("https://github.com/", "").strip("/")
-        labels = []
-        if pull_number:
-            try:
-                pr_data = self._api_request(f"repos/{repo_clean}/pulls/{pull_number}", headers={"Accept": "application/vnd.github.v3+json"})
-                labels.extend([l["name"] for l in pr_data.get("labels", [])])
-            except Exception:
-                pass
-        try:
-            repo_info = self._api_request(f"repos/{repo_clean}/topics", headers={"Accept": "application/vnd.github.mercy-preview+json"})
-            labels.extend(repo_info.get("names", []))
-        except Exception:
-            pass
-        return list(set(labels))
-
     def get_authenticated_user(self) -> Optional[str]:
         """Return the login of the token's authenticated user."""
         try:
@@ -221,36 +204,6 @@ class GitHubClient:
             print(f"[WARN] Failed to list topics for {repo_clean}: {e}")
             return []
 
-    def repo_has_workflows(self, repo: str, ref: Optional[str] = None) -> bool:
-        """Check whether a repository has GitHub Actions workflows on the
-        given ref (default branch by default). Returns False on 404/error."""
-        repo_clean = repo.replace("https://github.com/", "").strip("/")
-        endpoint = f"repos/{repo_clean}/contents/.github/workflows"
-        if ref:
-            endpoint += f"?ref={ref}"
-        try:
-            data = self._api_request(endpoint)
-            return isinstance(data, list) and any(
-                str(f.get("name", "")).endswith((".yml", ".yaml")) for f in data
-            )
-        except Exception:
-            return False
-
-    def list_repo_workflows(self, repo: str, ref: Optional[str] = None) -> List[str]:
-        """Return the workflow file names (.github/workflows/*.yml|*.yaml)
-        present on the given ref (default branch if not specified)."""
-        repo_clean = repo.replace("https://github.com/", "").strip("/")
-        endpoint = f"repos/{repo_clean}/contents/.github/workflows"
-        if ref:
-            endpoint += f"?ref={ref}"
-        try:
-            data = self._api_request(endpoint)
-            return [str(f.get("name", "")) for f in data
-                    if isinstance(data, list)
-                    and str(f.get("name", "")).endswith((".yml", ".yaml"))]
-        except Exception:
-            return []
-
     def has_open_fix_pr(self, repo: str, base: str) -> bool:
         """Return True if an open PR already targets `base` from an ai-fix branch.
 
@@ -285,15 +238,6 @@ class GitHubClient:
         except Exception as e:
             print(f"[WARN] Failed to list open PRs for {repo_clean}: {e}")
             return set()
-
-    def get_changed_files(self, repo: str, base_or_branch: str) -> List[str]:
-        """Get changed files on branch/PR."""
-        repo_clean = repo.replace("https://github.com/", "").strip("/")
-        try:
-            compare_data = self._api_request(f"repos/{repo_clean}/compare/main...{base_or_branch}")
-            return [f["filename"] for f in compare_data.get("files", [])]
-        except Exception:
-            return []
 
     def create_pull_request(
         self,
@@ -341,8 +285,3 @@ class GitHubClient:
                     pass
             print(f"[ERROR] Failed to create PR for {repo_clean} ({head} -> {base}): {e}")
             return None
-
-    def post_workflow_diagnostic_comment(self, event: CIEvent, error_ctx: ErrorContext):
-        """Post a diagnostic summary when an issue cannot be safely auto-remediated."""
-        print(f"[DIAGNOSTIC] Repo: {event.repo} | Branch: {event.broken_branch} | Tech: {error_ctx.tech}")
-        print(f"[DIAGNOSTIC] Category: {error_ctx.category.value} | Summary: {error_ctx.error_summary}")

@@ -98,8 +98,3 @@ class RepositoryManager:
         except Exception as e:
             print(f"[ERROR] commit_and_push failed: {e}")
             raise
-
-    def cleanup_workspace(self, workspace: str):
-        """Removes temporary workspace folder."""
-        if os.path.exists(workspace):
-            shutil.rmtree(workspace, ignore_errors=True)

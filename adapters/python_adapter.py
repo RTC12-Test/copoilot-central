@@ -1,7 +1,7 @@
 import json
 import os
 from typing import Dict, List, Optional
-from core.models import CIEvent, ErrorContext, FixResult, FailureCategory
+from core.models import CIEvent, ErrorContext, FailureCategory
 from core.github_client import GitHubClient
 from core.repository_manager import RepositoryManager
 from .base import BaseTechAdapter, FixPlan, ValidationResult

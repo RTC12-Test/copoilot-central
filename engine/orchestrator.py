@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 
 from core.github_client import GitHubClient
-from core.models import CIEvent, ErrorContext, FixResult, FailureCategory
+from core.models import CIEvent
 from core.repository_manager import RepositoryManager
 from adapters import get_adapter, resolve_tech_from_label, SUPPORTED_TECHS
 from adapters.base import FixPlan, ValidationResult
@@ -708,7 +708,7 @@ class CIOrchestrator:
         except Exception:
             return True
 
-    def _ai_analyze(self, logs: str, repo: Dict, event: CIEvent, tech: str) -> Optional[str]:
+    def _ai_analyze(self, logs: str, event: CIEvent, tech: str) -> Optional[str]:
         """Run the pluggable AI model to analyze the failure logs.
 
         Returns a root-cause analysis string, or None if the model is
@@ -731,7 +731,7 @@ class CIOrchestrator:
             print(f"[AI] analysis failed, falling back to heuristics: {e}")
             return None
 
-    def _resolve_fix_analysis(self, monitor_analysis, logs: str, repo: Dict,
+    def _resolve_fix_analysis(self, monitor_analysis, logs: str,
                               event: CIEvent, techs_str: str) -> str:
         """Root cause used to guide the fix.
 
@@ -743,7 +743,7 @@ class CIOrchestrator:
             print("[ANALYZE] using heuristic root cause "
                   "(AI log analysis skipped for speed)")
             return monitor_analysis.root_cause
-        ai_analysis = self._ai_analyze(logs, repo, event, techs_str)
+        ai_analysis = self._ai_analyze(logs, event, techs_str)
         return ai_analysis or "Unknown CI failure"
 
     def _ai_suggest_fix(self, plan: FixPlan, repo: Dict, event: CIEvent, tech: str,
@@ -810,7 +810,7 @@ class CIOrchestrator:
             print(f"[MONITOR] root cause: {monitor_analysis.root_cause[:300]}")
 
         fix_analysis = self._resolve_fix_analysis(
-            monitor_analysis, logs, repo, latest, techs_str)
+            monitor_analysis, logs, latest, techs_str)
         if not monitor_analysis.root_cause:
             print(f"[AI] Root cause: {fix_analysis[:300]}")
 

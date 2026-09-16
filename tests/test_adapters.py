@@ -252,11 +252,6 @@ class TestLabelResolution(unittest.TestCase):
             adapter = get_adapter(tech)
             self.assertEqual(adapter.tech, tech)
 
-    def test_multiple_labels(self):
-        from engine.label_resolver import resolve_technology_from_labels
-        techs = resolve_technology_from_labels(["ci_terraform", "ci_java"])
-        self.assertEqual(techs, ["terraform", "java"])
-
     def test_resolve_tech_log_driven_multi_tech(self):
         from engine.orchestrator import CIOrchestrator
         o = CIOrchestrator(github_token="")
@@ -710,7 +705,7 @@ class TestLabelResolution(unittest.TestCase):
         o = CIOrchestrator(github_token="")
         o.ai_model = AiModel()
         got = o._resolve_fix_analysis(
-            SimpleNamespace(root_cause="TF init failed"), "logs", {}, ev, "terraform")
+            SimpleNamespace(root_cause="TF init failed"), "logs", ev, "terraform")
         self.assertEqual(got, "TF init failed")
 
         # fallback: heuristic found nothing -> AI analysis is used
@@ -723,7 +718,7 @@ class TestLabelResolution(unittest.TestCase):
         o2 = CIOrchestrator(github_token="")
         o2.ai_model = AiModel2()
         got2 = o2._resolve_fix_analysis(
-            SimpleNamespace(root_cause=""), "logs", {}, ev, "terraform")
+            SimpleNamespace(root_cause=""), "logs", ev, "terraform")
         self.assertEqual(got2, "AI analysis result")
 
     def test_pr_content_template_by_default_no_model_call(self):
