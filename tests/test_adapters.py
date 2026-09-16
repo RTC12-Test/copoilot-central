@@ -410,6 +410,45 @@ class TestLabelResolution(unittest.TestCase):
         chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"}])
         self.assertEqual(chosen.run_id, 11)
 
+    def test_run_selection_terraform_child_is_candidate_and_selectable(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        seen_candidates = []
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                if url == "u1":
+                    return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
+                                    workflow_name="W", job_name="J",
+                                    broken_branch="main", head_sha="a",
+                                    updated_at="2026-09-14T06:30:00Z")]
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="main", head_sha="b",
+                                updated_at="2026-09-14T06:31:00Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                seen_candidates.extend((c.repo, c.run_id) for c in candidates)
+                return "RTC12-Test/terraform_child"  # repo-only key
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"},
+                                      {"name": "terraform_child", "url": "u2"}])
+        # terraform_child was scanned and contributed a candidate
+        self.assertIn(("RTC12-Test/terraform_child", 22), seen_candidates)
+        # repo-only key resolves to that repo's (newest) failed run
+        self.assertEqual(chosen.run_id, 22)
+        self.assertEqual(chosen.repo, "RTC12-Test/terraform_child")
+
     def test_run_selection_scans_all_repos_and_skips_clean_ones(self):
         from engine.orchestrator import CIOrchestrator
         from core.models import CIEvent
