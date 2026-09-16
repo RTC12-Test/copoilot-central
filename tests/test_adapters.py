@@ -1,4 +1,6 @@
 """Unit tests for technology-specific adapters."""
+import os
+import tempfile
 import unittest
 from core.models import CIEvent, ErrorContext, FailureCategory
 from adapters import get_adapter, resolve_tech_from_label, REGISTRY
@@ -484,6 +486,77 @@ class TestLabelResolution(unittest.TestCase):
         # terraform_child is excluded (already remediated), asd2 is selected
         self.assertEqual(chosen.run_id, 11)
         self.assertEqual(chosen.repo, "RTC12-Test/asd2")
+
+    def test_run_selection_single_candidate_skips_model_call(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/asd2", run_id=11,
+                                workflow_name="W", job_name="J",
+                                broken_branch="main", head_sha="a",
+                                updated_at="2026-09-14T06:30:00Z")]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_run(self, candidates, context=None):
+                raise AssertionError("model must not be called for one candidate")
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u1"}])
+        self.assertEqual(chosen.run_id, 11)
+
+    def test_discovery_selection_cached(self):
+        from engine.orchestrator import CIOrchestrator
+
+        calls = {"n": 0}
+
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_org_repos(self, org):
+                return [
+                    {"name": "terraform_child",
+                     "full_name": "RTC12-Test/terraform_child",
+                     "url": "https://github.com/RTC12-Test/terraform_child",
+                     "default_branch": "main", "topics": ["ci_terraform"]},
+                    {"name": "asd2", "full_name": "RTC12-Test/asd2",
+                     "url": "https://github.com/RTC12-Test/asd2",
+                     "default_branch": "main", "topics": []},
+                ]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return True
+            def select_repos(self, candidates, context=None):
+                calls["n"] += 1
+                return ["RTC12-Test/terraform_child", "RTC12-Test/asd2"]
+
+        tmpdir = tempfile.mkdtemp()
+        old_dir = os.environ.get("CI_CACHE_DIR")
+        os.environ["CI_CACHE_DIR"] = tmpdir
+        try:
+            o = CIOrchestrator(github_token="")
+            o.client = FakeClient()
+            o.ai_model = AiModel()
+            r1 = o.discover_repos()
+            r2 = o.discover_repos()
+        finally:
+            if old_dir is None:
+                os.environ.pop("CI_CACHE_DIR", None)
+            else:
+                os.environ["CI_CACHE_DIR"] = old_dir
+        self.assertEqual(calls["n"], 1)  # model called once, second run cached
+        self.assertEqual(sorted(x["name"] for x in r2),
+                         ["asd2", "terraform_child"])
 
     def test_run_selection_scans_all_repos_and_skips_clean_ones(self):
         from engine.orchestrator import CIOrchestrator

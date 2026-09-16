@@ -1,6 +1,9 @@
 import os
 import json
+import time
+import tempfile
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional, Tuple
 
 from core.github_client import GitHubClient
@@ -140,10 +143,11 @@ class CIOrchestrator:
             for o in org_configs
         }
         self_repo = self._self_repo()
-        for org in orgs:
-            org_repos = self.client.list_org_repos(org)
+        with ThreadPoolExecutor(max_workers=min(8, len(orgs) or 1)) as pool:
+            org_repo_lists = list(pool.map(self.client.list_org_repos, orgs))
+        for org, org_repos in zip(orgs, org_repo_lists):
             default_branch = default_branches.get(org) or default_branch
-            for r in org_repos:
+            for r in org_repos or []:
                 if self_repo and r.get("name") == self_repo:
                     continue
                 seen_key = r.get("full_name") or r.get("name")
@@ -208,13 +212,48 @@ class CIOrchestrator:
                 or mon.get("provider")
                 or "ai").lower()
 
+    def _selection_cache_path(self) -> str:
+        """Path of the discovery cache file (env $CI_CACHE_DIR or tmp dir)."""
+        cachedir = os.environ.get("CI_CACHE_DIR") or os.path.join(
+            tempfile.gettempdir(), "copoilot-central")
+        os.makedirs(cachedir, exist_ok=True)
+        return os.path.join(cachedir, "repo_selection.json")
+
+    def _cache_ttl(self) -> int:
+        return int(os.environ.get("CI_DISCOVERY_TTL", "600"))
+
+    def _cached_selection(self, key: str) -> Optional[List[str]]:
+        """Return the cached AI repo selection for `key` if still fresh."""
+        if self._cache_ttl() <= 0:
+            return None
+        try:
+            with open(self._selection_cache_path()) as f:
+                data = json.load(f)
+            if data.get("key") == key and \
+                    (time.time() - data.get("ts", 0)) < self._cache_ttl():
+                return list(data.get("names") or [])
+        except Exception:
+            pass
+        return None
+
+    def _store_selection(self, key: str, names: List[str]) -> None:
+        if self._cache_ttl() <= 0:
+            return
+        try:
+            with open(self._selection_cache_path(), "w") as f:
+                json.dump({"key": key, "ts": time.time(), "names": names}, f)
+        except Exception:
+            pass
+
     def _apply_repo_selection(self, candidates: List[Dict]) -> List[Dict]:
         """Narrow the candidate repos to monitor using the pluggable model.
 
         With provider=ai this asks the configured model (e.g. GitHub Copilot
         CLI) which repos are active dev projects to monitor, then filters the
-        candidate list. Falls back to the full list if the model is
-        unavailable, returns nothing, or cannot be parsed.
+        candidate list. The model's answer is cached for CI_DISCOVERY_TTL
+        seconds (default 600) so periodic runs skip the slow model call.
+        Falls back to the full list if the model is unavailable, returns
+        nothing, or cannot be parsed.
         """
         if not candidates:
             return candidates
@@ -225,12 +264,22 @@ class CIOrchestrator:
             if not self.ai_model.is_available():
                 print("[SELECT] model unavailable; keeping heuristic candidates")
                 return candidates
-            print(f"[SELECT] choosing monitor repos via '{self.ai_model.name}' "
-                  f"({len(candidates)} candidates)...")
-            names = self.ai_model.select_repos(candidates, {
-                "orgs": self._org_repos(),
-                "self_repo": self._self_repo(),
-            })
+            key = (self._self_repo() + "|" +
+                   "|".join(sorted(c.get("repo_key") or c.get("name") or ""
+                                   for c in candidates)))
+            names = self._cached_selection(key)
+            if names is None:
+                print(f"[SELECT] choosing monitor repos via '{self.ai_model.name}' "
+                      f"({len(candidates)} candidates)...")
+                names = self.ai_model.select_repos(candidates, {
+                    "orgs": self._org_repos(),
+                    "self_repo": self._self_repo(),
+                })
+                if names:
+                    self._store_selection(key, names)
+            else:
+                print(f"[SELECT] using cached repo selection "
+                      f"({len(names)} repo(s))")
             if not names:
                 print("[SELECT] model returned no selection; keeping all candidates")
                 return candidates
@@ -288,14 +337,27 @@ class CIOrchestrator:
         The \"first failed CI job\" is the newest failing run. Runs that already
         have an open ai-fix PR (the agent is already remediating them) are
         skipped so the agent moves to the next repo's failure instead of
-        re-selecting an already-handled run.
+        re-selecting an already-handled run. Open-PR data is fetched once per
+        repo (batched) when the client supports it.
         """
         events = self.client.list_recent_failed_runs(repo["url"], limit=10)
         failed = sorted((ev for ev in events if ev.conclusion == "failure"),
                         key=lambda ev: ev.updated_at, reverse=True)
+        if not failed:
+            return None
+        covered = set()
+        has_batch = hasattr(self.client, "list_open_fix_pr_bases")
+        if has_batch:
+            covered = self.client.list_open_fix_pr_bases(repo["url"])
         for ev in failed:
-            has_open = getattr(self.client, "has_open_fix_pr", None)
-            if has_open and has_open(repo["url"], ev.broken_branch):
+            if has_batch:
+                open_pr = ev.broken_branch in covered
+            else:
+                open_pr = False
+                has_one = getattr(self.client, "has_open_fix_pr", None)
+                if has_one:
+                    open_pr = has_one(repo["url"], ev.broken_branch)
+            if open_pr:
                 print(f"[SCAN] {repo.get('name')}: run {ev.run_id} already has "
                       f"an open ai-fix PR (branch {ev.broken_branch}); skipping")
                 continue
@@ -307,21 +369,29 @@ class CIOrchestrator:
 
         Every monitored repo is checked for its first failed CI job (its most
         recent failing run not already covered by an open ai-fix PR); those
-        runs become candidates, one per repo. The AI model then selects exactly
-        ONE repo's run to fix. When the model is unavailable or returns
-        nothing, the newest candidate by updated_at wins (previous behavior).
+        runs become candidates, one per repo. Repos are scanned in parallel.
+        When exactly one candidate exists it is taken directly (no model call);
+        otherwise the AI model selects exactly ONE repo's run to fix, with the
+        newest candidate by updated_at as the code fallback.
         """
+        if not repos:
+            return None
+        with ThreadPoolExecutor(max_workers=min(8, len(repos) or 1)) as pool:
+            firsts = list(pool.map(self._first_failed_run, repos))
         candidates: List[CIEvent] = []
-        for repo in repos:
-            first = self._first_failed_run(repo)
+        for repo, first in zip(repos, firsts):
             if first is None:
                 print(f"[SCAN] {repo.get('name')}: no failed CI runs")
-                continue
-            print(f"[SCAN] {repo.get('name')}: first failed run {first.run_id} "
-                  f"(updated {first.updated_at})")
-            candidates.append(first)
+            else:
+                print(f"[SCAN] {repo.get('name')}: first failed run "
+                      f"{first.run_id} (updated {first.updated_at})")
+                candidates.append(first)
         if not candidates:
             return None
+        if len(candidates) == 1:
+            print(f"[SELECT-RUN] single candidate {candidates[0].run_id} in "
+                  f"{candidates[0].repo}; skipping model selection")
+            return candidates[0]
 
         chosen = self._ai_select_run(candidates, repos)
         if chosen is None:

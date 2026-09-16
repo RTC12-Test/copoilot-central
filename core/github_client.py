@@ -4,6 +4,7 @@ import os
 import subprocess
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 from .models import CIEvent, ErrorContext
 
@@ -180,20 +181,26 @@ class GitHubClient:
             if not isinstance(data, list) or not data:
                 break
             for r in data:
-                topics = r.get("topics", [])
-                if not topics:
-                    topics = self.get_repo_topics(r.get("full_name") or r.get("name", ""))
                 repos.append({
                     "name": r.get("name", ""),
                     "full_name": r.get("full_name", ""),
                     "url": r.get("html_url") or f"https://github.com/{r.get('full_name','')}",
                     "default_branch": r.get("default_branch", "main"),
-                    "topics": topics,
+                    "topics": r.get("topics", []),
                     "pushed_at": r.get("pushed_at", ""),
                 })
             if len(data) < 100:
                 break
             page += 1
+        # The org listing often omits `topics`; fetch missing ones in parallel
+        # instead of one sequential API call per repo.
+        pending = [r for r in repos if not r.get("topics")]
+        if pending:
+            names = [r.get("full_name") or r.get("name", "") for r in pending]
+            with ThreadPoolExecutor(max_workers=min(12, len(pending) or 1)) as pool:
+                fetched = list(pool.map(self.get_repo_topics, names))
+            for r, topics in zip(pending, fetched):
+                r["topics"] = topics
         return repos
 
     def get_repo_topics(self, repo: str) -> List[str]:
@@ -260,6 +267,24 @@ class GitHubClient:
         except Exception as e:
             print(f"[WARN] Failed to list open PRs for {repo_clean} ({base}): {e}")
             return False
+
+    def list_open_fix_pr_bases(self, repo: str) -> set:
+        """Return base refs that already have an open ai-fix/ PR.
+
+        One API call per repo instead of one per failed run; used when scanning
+        several failed runs of the same repo.
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(
+                f"repos/{repo_clean}/pulls?state=open&per_page=100")
+            return {str(p.get("base", {}).get("ref", ""))
+                    for p in data
+                    if str(p.get("head", {}).get("ref", ""))
+                    .startswith("ai-fix/")}
+        except Exception as e:
+            print(f"[WARN] Failed to list open PRs for {repo_clean}: {e}")
+            return set()
 
     def get_changed_files(self, repo: str, base_or_branch: str) -> List[str]:
         """Get changed files on branch/PR."""
