@@ -254,6 +254,34 @@ class GitHubClient:
             return True
         return status == "behind" and data.get("ahead_by", 1) == 0
 
+    def branch_has_passing_run_after(self, repo: str, branch: str, after: str) -> bool:
+        """Whether `branch` already has a successful run created at/after `after`.
+
+        Lets the agent skip failed runs whose branch has since gone green (the
+        fix already landed) instead of re-fixing a stale failure on every poll.
+        GitHub timestamps are ISO-8601 UTC in a consistent format
+        (YYYY-MM-DDTHH:MM:SSZ), so string ordering is a valid comparison.
+        On any API error we fail open (return False) and keep attempting a fix
+        rather than risk hiding a real failure.
+        """
+        after_ts = (after or "").strip()
+        if not after_ts:
+            return False
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(
+                f"repos/{repo_clean}/actions/runs?branch={quote(branch, safe='')}"
+                f"&status=success&per_page=10")
+        except Exception as e:
+            print(f"[WARN] Failed to fetch successful runs for "
+                  f"{repo_clean} ({branch}): {e}")
+            return False
+        return any(
+            str(r.get("created_at", "")) >= after_ts
+            for r in data.get("workflow_runs", [])
+            if r.get("conclusion") == "success"
+        )
+
     def has_open_fix_pr(self, repo: str, base: str) -> bool:
         """Return True if an open PR already targets `base` from an ai-fix branch.
 

@@ -414,12 +414,23 @@ class CIOrchestrator:
                       f"was closed/deleted (no longer on the remote); skipping "
                       f"run {ev.run_id}")
                 continue
+            if default_branch and ev.broken_branch == default_branch:
+                print(f"[SCAN] {repo.get('name')}: run {ev.run_id} is ON the "
+                      f"default branch '{default_branch}'; refusing to raise "
+                      f"a fix PR against the default branch")
+                continue
             if (merged_fn and default_branch
                     and ev.broken_branch != default_branch
                     and merged_fn(repo["url"], ev.broken_branch, default_branch)):
                 print(f"[SCAN] {repo.get('name')}: branch '{ev.broken_branch}' "
                       f"already merged into '{default_branch}'; skipping "
                       f"run {ev.run_id}")
+                continue
+            pass_fn = getattr(self.client, "branch_has_passing_run_after", None)
+            if pass_fn and pass_fn(repo["url"], ev.broken_branch, ev.updated_at):
+                print(f"[SCAN] {repo.get('name')}: run {ev.run_id} is stale — "
+                      f"branch '{ev.broken_branch}' already has a newer "
+                      f"successful run; skipping")
                 continue
             if has_batch:
                 open_pr = ev.broken_branch in covered
@@ -825,11 +836,22 @@ class CIOrchestrator:
         get_merged = getattr(self.client, "branch_merged_into_base", None)
         default_branch = (get_default(repo["url"]) if get_default else None) \
             or repo.get("branch")
+        if default_branch and broken_branch == default_branch:
+            print(f"[SKIP] {repo['name']}: broken branch '{broken_branch}' is "
+                  f"the default branch; no fix PR raised against the default "
+                  f"branch")
+            return True
         if (get_merged and default_branch
                 and broken_branch != default_branch
                 and get_merged(repo["url"], broken_branch, default_branch)):
             print(f"[SKIP] {repo['name']}: broken branch '{broken_branch}' "
                   f"already merged into '{default_branch}'; no fix PR raised")
+            return True
+        pass_fn = getattr(self.client, "branch_has_passing_run_after", None)
+        if pass_fn and pass_fn(repo["url"], broken_branch, latest.updated_at):
+            print(f"[SKIP] {repo['name']}: failure {run_id} is stale — branch "
+                  f"'{broken_branch}' already has a newer successful run; no "
+                  f"fix PR raised")
             return True
 
         if self.client.has_open_fix_pr(repo["url"], broken_branch):

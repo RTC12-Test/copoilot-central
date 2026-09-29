@@ -898,6 +898,120 @@ class TestLabelResolution(unittest.TestCase):
         chosen = o.get_latest_failed([{"name": "terraform_child", "url": "u2"}])
         self.assertEqual(chosen.run_id, 22)
 
+    def test_run_selection_skips_run_on_default_branch(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # A failing run ON the default branch must never become a candidate:
+        # raising a fix PR against the default branch is forbidden.
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/python_child", run_id=55,
+                                workflow_name="W", job_name="J",
+                                broken_branch="main", head_sha="m",
+                                updated_at=_ago(1))]
+
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "main"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def has_open_fix_pr(self, repo, base):
+                return False
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "python_child", "url": "u2"}])
+        self.assertIsNone(chosen)
+
+    def test_run_selection_skips_stale_run_with_newer_green_run(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # Failed run at 06:33 on feature/test, but the branch already has a
+        # newer successful run (fix landed) -> the failure is stale.
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/python_child", run_id=55,
+                                workflow_name="W", job_name="J",
+                                broken_branch="feature/test", head_sha="m",
+                                updated_at="2026-09-29T06:33:27Z")]
+
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "main"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def branch_has_passing_run_after(self, repo, branch, after):
+                return True
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "python_child", "url": "u2"}])
+        self.assertIsNone(chosen)
+
+    def test_run_selection_stale_guard_false_keeps_candidate(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # No newer green run -> the stale guard reports False and the failed
+        # run stays a legitimate fix candidate (regression guard).
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/python_child", run_id=55,
+                                workflow_name="W", job_name="J",
+                                broken_branch="feature/live", head_sha="m",
+                                updated_at=_ago(1))]
+
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "main"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def branch_has_passing_run_after(self, repo, branch, after):
+                return False
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "python_child", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 55)
+
     def test_fix_single_run_skips_when_branch_deleted_or_merged(self):
         from engine.orchestrator import CIOrchestrator
         from core.models import CIEvent
@@ -961,6 +1075,50 @@ class TestLabelResolution(unittest.TestCase):
         ok = o.fix_single_run(ev, [{"name": "terraform_child", "url": "u"}])
         self.assertTrue(ok)  # skipped by the open-PR gate, not the branch gate
 
+    def test_fix_single_run_skips_default_branch_and_stale_run(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # Both new gates must short-circuit BEFORE the open-PR check and the
+        # fix stage: a run on the default branch and a stale failure whose
+        # branch already went green must never start a fix.
+        class FakeClient:
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "main"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def branch_has_passing_run_after(self, repo, branch, after):
+                return True
+
+            def has_open_fix_pr(self, repo, base):
+                raise AssertionError("open-PR check must not run "
+                                     "after a branch gate")
+
+            def get_failed_job_logs(self, repo, run_id):
+                raise AssertionError("fix must not start for a guarded run")
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        repos = [{"name": "python_child", "url": "u"}]
+
+        # run on the default branch itself -> skipped, no fix, no PR
+        ev_default = CIEvent(repo="RTC12-Test/python_child", run_id=99,
+                             workflow_name="W", job_name="J",
+                             broken_branch="main", head_sha="h")
+        self.assertTrue(o.fix_single_run(ev_default, repos))
+
+        # stale failure: branch already has a newer successful run -> skipped
+        ev_stale = CIEvent(repo="RTC12-Test/python_child", run_id=99,
+                           workflow_name="W", job_name="J",
+                           broken_branch="feature/live",
+                           updated_at="2026-09-29T06:33:27Z", head_sha="h")
+        self.assertTrue(o.fix_single_run(ev_stale, repos))
+
     def test_branch_health_client_semantics(self):
         from core.github_client import GitHubClient
 
@@ -977,6 +1135,13 @@ class TestLabelResolution(unittest.TestCase):
                     "feature/unique": {"status": "ahead", "ahead_by": 3},
                     "feature/diverged": {"status": "diverged", "ahead_by": 1},
                 }.get(branch, {})
+            if "actions/runs" in endpoint:
+                return {"workflow_runs": [
+                    {"conclusion": "success",
+                     "created_at": "2026-09-29T06:45:20Z"},
+                    {"conclusion": "failure",
+                     "created_at": "2026-09-29T06:40:00Z"},
+                ]}
             return {"default_branch": "master"}
 
         c._api_request = fake_api
@@ -992,10 +1157,25 @@ class TestLabelResolution(unittest.TestCase):
             "https://github.com/organization/repo", "feature/unique", "master"))
         self.assertFalse(c.branch_merged_into_base(
             "https://github.com/organization/repo", "feature/diverged", "master"))
+        # success at 06:45 is at/after the failing run's last update -> stale
+        self.assertTrue(c.branch_has_passing_run_after(
+            "https://github.com/organization/repo", "feature/test",
+            "2026-09-29T06:33:27Z"))
+        # success at 06:45 predates the given point in time -> not green yet
+        self.assertFalse(c.branch_has_passing_run_after(
+            "https://github.com/organization/repo", "feature/test",
+            "2026-09-29T06:50:00Z"))
+        # empty/unknown timestamp never counts as a newer green run
+        self.assertFalse(c.branch_has_passing_run_after(
+            "https://github.com/organization/repo", "feature/test", ""))
 
         c._api_request = lambda *a, **k: {}
         self.assertTrue(c.branch_exists(
             "https://github.com/organization/repo", "main"))
+        # API failure fails open: no skip, the run stays fixable
+        self.assertFalse(c.branch_has_passing_run_after(
+            "https://github.com/organization/repo", "feature/test",
+            "2026-09-29T06:00:00Z"))
 
 
 if __name__ == "__main__":
