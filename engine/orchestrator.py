@@ -134,7 +134,11 @@ class CIOrchestrator:
             return self._normalize_repos(explicit)
 
         orgs = self._org_repos()
-        default_branch = "main"
+        # Default branch comes from config (monitoring.default_branch or the
+        # per-org branch override) with the API-reported default_branch per
+        # repo taking precedence — never a hardcoded value.
+        default_branch = ((self.config.get("monitoring") or {})
+                          .get("default_branch") or "")
         discovered = []
         org_configs = self.config.get("organizations", [])
         if isinstance(org_configs, dict):
@@ -373,7 +377,9 @@ class CIOrchestrator:
         open ai-fix PR (the agent is already remediating them) are skipped so
         the agent moves to the next repo's failure instead of re-selecting an
         already-handled run. Open-PR data is fetched once per repo (batched)
-        when the client supports it.
+        when the client supports it. Runs whose target branch was closed/
+        deleted or already merged into the default branch are skipped too — a
+        fix PR would have no valid base (both resolved at runtime).
         """
         events = self.client.list_recent_failed_runs(repo["url"], limit=10)
         all_failed = [ev for ev in events if ev.conclusion == "failure"]
@@ -393,7 +399,28 @@ class CIOrchestrator:
         has_batch = hasattr(self.client, "list_open_fix_pr_bases")
         if has_batch:
             covered = self.client.list_open_fix_pr_bases(repo["url"])
+        # Branch health: never offer a run whose target branch was closed or
+        # already merged into the default branch — a fix PR would have no
+        # valid base. Both the default branch and merge state are resolved at
+        # runtime, never hardcoded.
+        exists_fn = getattr(self.client, "branch_exists", None)
+        merged_fn = getattr(self.client, "branch_merged_into_base", None)
+        default_fn = getattr(self.client, "get_default_branch", None)
+        default_branch = (default_fn(repo["url"]) if default_fn else None) \
+            or repo.get("branch")
         for ev in failed:
+            if exists_fn and not exists_fn(repo["url"], ev.broken_branch):
+                print(f"[SCAN] {repo.get('name')}: branch '{ev.broken_branch}' "
+                      f"was closed/deleted (no longer on the remote); skipping "
+                      f"run {ev.run_id}")
+                continue
+            if (merged_fn and default_branch
+                    and ev.broken_branch != default_branch
+                    and merged_fn(repo["url"], ev.broken_branch, default_branch)):
+                print(f"[SCAN] {repo.get('name')}: branch '{ev.broken_branch}' "
+                      f"already merged into '{default_branch}'; skipping "
+                      f"run {ev.run_id}")
+                continue
             if has_batch:
                 open_pr = ev.broken_branch in covered
             else:
@@ -780,7 +807,30 @@ class CIOrchestrator:
             print(f"No matching repo config for {latest.repo}")
             return False
 
-        broken_branch = latest.broken_branch or repo.get("branch") or "main"
+        broken_branch = latest.broken_branch or repo.get("branch")
+        if not broken_branch:
+            print(f"[SKIP] {repo['name']}: no target branch known for run {run_id}")
+            return True
+
+        # Never raise a fix PR when the target branch was closed/deleted or
+        # already merged into the default branch. Both the default branch and
+        # the merge state come from the API at runtime (no hardcoded values).
+        if not getattr(self.client, "branch_exists", lambda r, b: True)(
+                repo["url"], broken_branch):
+            print(f"[SKIP] {repo['name']}: broken branch '{broken_branch}' no "
+                  f"longer exists on the remote (closed/merged + deleted); "
+                  "no fix PR raised")
+            return True
+        get_default = getattr(self.client, "get_default_branch", None)
+        get_merged = getattr(self.client, "branch_merged_into_base", None)
+        default_branch = (get_default(repo["url"]) if get_default else None) \
+            or repo.get("branch")
+        if (get_merged and default_branch
+                and broken_branch != default_branch
+                and get_merged(repo["url"], broken_branch, default_branch)):
+            print(f"[SKIP] {repo['name']}: broken branch '{broken_branch}' "
+                  f"already merged into '{default_branch}'; no fix PR raised")
+            return True
 
         if self.client.has_open_fix_pr(repo["url"], broken_branch):
             print(f"[SKIP] {repo['name']} already has an open ai-fix PR targeting "

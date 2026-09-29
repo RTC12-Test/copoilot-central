@@ -792,6 +792,211 @@ class TestLabelResolution(unittest.TestCase):
         # one candidate per failing repo; clean repo contributes nothing
         self.assertEqual(chosen.run_id, 22)
 
+    def test_run_selection_skips_branch_merged_into_default(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # feature/old still exists but was already merged into the default
+        # branch -> its failed run must never become a candidate for a fix PR
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="feature/old", head_sha="b",
+                                updated_at=_ago(1))]
+
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "master"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return True
+
+            def has_open_fix_pr(self, repo, base):
+                return False
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "terraform_child", "url": "u2"}])
+        self.assertIsNone(chosen)
+
+    def test_run_selection_skips_deleted_branch(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # branch was closed + deleted -> run is not selectable
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="feature/old", head_sha="b",
+                                updated_at=_ago(1))]
+
+            def branch_exists(self, repo, branch):
+                return False
+
+            def has_open_fix_pr(self, repo, base):
+                return False
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "terraform_child", "url": "u2"}])
+        self.assertIsNone(chosen)
+
+    def test_run_selection_keeps_live_branch_candidate(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # live branch, not merged -> still a candidate (regression guard)
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/terraform_child", run_id=22,
+                                workflow_name="W", job_name="J",
+                                broken_branch="feature/live", head_sha="b",
+                                updated_at=_ago(1))]
+
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "master"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def has_open_fix_pr(self, repo, base):
+                return False
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "terraform_child", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 22)
+
+    def test_fix_single_run_skips_when_branch_deleted_or_merged(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        def make_o(deleted=False, merged=False):
+            class FakeClient:
+                def branch_exists(self, repo, branch):
+                    return not deleted
+
+                def get_default_branch(self, repo):
+                    return "master"
+
+                def branch_merged_into_base(self, repo, branch, base):
+                    return merged
+
+                def has_open_fix_pr(self, repo, base):
+                    raise AssertionError("open-PR check must not run "
+                                         "after a branch gate")
+
+                def get_failed_job_logs(self, repo, run_id):
+                    raise AssertionError("fix must not start for a dead branch")
+
+            o = CIOrchestrator(github_token="")
+            o.client = FakeClient()
+            return o
+
+        ev = CIEvent(repo="RTC12-Test/terraform_child", run_id=99,
+                     workflow_name="W", job_name="J",
+                     broken_branch="feature/old", head_sha="h")
+        repos = [{"name": "terraform_child", "url": "u"}]
+        # deleted branch -> skipped, no fix started, no PR
+        self.assertTrue(make_o(deleted=True).fix_single_run(ev, repos))
+        # branch already merged into the default branch -> skipped, no PR
+        self.assertTrue(make_o(merged=True).fix_single_run(ev, repos))
+
+    def test_fix_single_run_healthy_branch_not_blocked_by_branch_gate(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        class FakeClient:
+            def branch_exists(self, repo, branch):
+                return True
+
+            def get_default_branch(self, repo):
+                return "master"
+
+            def branch_merged_into_base(self, repo, branch, base):
+                return False
+
+            def has_open_fix_pr(self, repo, base):
+                return True  # legal skip AFTER passing the branch gate
+
+            def get_failed_job_logs(self, repo, run_id):
+                raise AssertionError("must not reach the fix stage")
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        ev = CIEvent(repo="RTC12-Test/terraform_child", run_id=99,
+                     workflow_name="W", job_name="J",
+                     broken_branch="feature/live", head_sha="h")
+        ok = o.fix_single_run(ev, [{"name": "terraform_child", "url": "u"}])
+        self.assertTrue(ok)  # skipped by the open-PR gate, not the branch gate
+
+    def test_branch_health_client_semantics(self):
+        from core.github_client import GitHubClient
+
+        c = GitHubClient(token="x")
+
+        def fake_api(endpoint, method="GET", data=None, headers=None):
+            if "branches/" in endpoint:
+                raise RuntimeError("GitHub API HTTPError 404 for url")
+            if "compare/" in endpoint:
+                branch = endpoint.split("...")[-1].replace("%2F", "/")
+                return {
+                    "feature/merged": {"status": "behind", "ahead_by": 0},
+                    "feature/identical": {"status": "identical"},
+                    "feature/unique": {"status": "ahead", "ahead_by": 3},
+                    "feature/diverged": {"status": "diverged", "ahead_by": 1},
+                }.get(branch, {})
+            return {"default_branch": "master"}
+
+        c._api_request = fake_api
+        self.assertFalse(
+            c.branch_exists("https://github.com/organization/repo", "feature/x"))
+        self.assertEqual(
+            c.get_default_branch("https://github.com/organization/repo"), "master")
+        self.assertTrue(c.branch_merged_into_base(
+            "https://github.com/organization/repo", "feature/merged", "master"))
+        self.assertTrue(c.branch_merged_into_base(
+            "https://github.com/organization/repo", "feature/identical", "master"))
+        self.assertFalse(c.branch_merged_into_base(
+            "https://github.com/organization/repo", "feature/unique", "master"))
+        self.assertFalse(c.branch_merged_into_base(
+            "https://github.com/organization/repo", "feature/diverged", "master"))
+
+        c._api_request = lambda *a, **k: {}
+        self.assertTrue(c.branch_exists(
+            "https://github.com/organization/repo", "main"))
+
 
 if __name__ == "__main__":
     unittest.main()

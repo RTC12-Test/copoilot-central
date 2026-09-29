@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+# runtime agent logs (main.py continuous mode writes agent.log when
+# the configured /var/log/agent.log is not writable by the process)
+agent.log
 .terraform/
 .terraform.*
 *.tfstate

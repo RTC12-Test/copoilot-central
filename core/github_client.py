@@ -4,6 +4,7 @@ import os
 import subprocess
 import urllib.request
 import urllib.error
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional
 from .models import CIEvent
@@ -203,6 +204,55 @@ class GitHubClient:
         except Exception as e:
             print(f"[WARN] Failed to list topics for {repo_clean}: {e}")
             return []
+
+    def get_default_branch(self, repo: str) -> Optional[str]:
+        """Return the repository's default branch as reported by the API.
+
+        Always discovered at runtime from the repo metadata, never hardcoded.
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(f"repos/{repo_clean}")
+            return data.get("default_branch")
+        except Exception as e:
+            print(f"[WARN] Failed to read default branch for {repo_clean}: {e}")
+            return None
+
+    def branch_exists(self, repo: str, branch: str) -> bool:
+        """Whether the branch still exists on the remote.
+
+        A 404 means the branch was closed/deleted (e.g. after a merge), so no
+        fix PR can target it. Any other API error is treated as "exists" so a
+        transient API hiccup never blocks a legitimate fix.
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            self._api_request(
+                f"repos/{repo_clean}/branches/{quote(branch, safe='')}")
+            return True
+        except RuntimeError as e:
+            return "404" not in str(e)
+        except Exception:
+            return True
+
+    def branch_merged_into_base(self, repo: str, branch: str, base: str) -> bool:
+        """Whether `base` already contains everything from `branch`.
+
+        Uses the compare endpoint (base...branch): the branch counts as merged
+        when the comparison is identical, or when `base` is strictly ahead of
+        `branch` with no unique branch commits (ahead_by == 0).
+        """
+        repo_clean = repo.replace("https://github.com/", "").strip("/")
+        try:
+            data = self._api_request(
+                f"repos/{repo_clean}/compare/"
+                f"{quote(base, safe='')}...{quote(branch, safe='')}")
+        except Exception:
+            return False
+        status = data.get("status")
+        if status == "identical":
+            return True
+        return status == "behind" and data.get("ahead_by", 1) == 0
 
     def has_open_fix_pr(self, repo: str, base: str) -> bool:
         """Return True if an open PR already targets `base` from an ai-fix branch.

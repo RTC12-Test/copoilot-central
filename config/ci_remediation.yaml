@@ -83,6 +83,9 @@ fixing:
 monitoring:
   provider: heuristic   # heuristic | ai
   repo_selection: ai   # ai | heuristic
+  # default_branch: OPTIONAL fallback default branch used only when the GitHub
+  #   API does not report a repo's default_branch (the API value always wins).
+  #   The agent never hardcodes a branch name.
   # run_window_hours: the agent only fixes failures UPDATED within this many
   #   hours (default 24, mirrors the discovery push window). Older failures
   #   are left untouched even if unremediated, so a loop run stops once the
