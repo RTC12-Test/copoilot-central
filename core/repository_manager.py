@@ -74,8 +74,21 @@ class RepositoryManager:
             subprocess.run(["git", "config", "user.email", author_email], cwd=workspace, check=True)
 
             if files:
+                staged_any = False
                 for f in files:
+                    if not os.path.exists(os.path.join(workspace, f)):
+                        # Planned paths can be transient (e.g. a scratch file an
+                        # AI fix session created then removed). Never let one
+                        # stale path abort an otherwise good fix.
+                        print(f"[WARN] planned file '{f}' missing from the "
+                              f"workspace; skipping git add for it")
+                        continue
                     subprocess.run(["git", "add", f], cwd=workspace, check=True)
+                    staged_any = True
+                if not staged_any:
+                    # Every planned path was stale/missing: stage tracked
+                    # modifications so a real fix is still committed.
+                    subprocess.run(["git", "add", "-u"], cwd=workspace, check=True)
             else:
                 subprocess.run(["git", "add", "."], cwd=workspace, check=True)
 
