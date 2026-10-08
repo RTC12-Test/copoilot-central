@@ -97,7 +97,7 @@ class CopilotCLIModel(AIModel):
                 "labels": c.get("labels", []),
                 "pushed_at": pushed,
                 "recent_push_within_24h": recent,
-                "default_branch": c.get("default_branch", c.get("branch", "main")),
+                "default_branch": c.get("default_branch") or c.get("branch") or "",
             })
         self_repo = (context or {}).get("self_repo") or ""
         skip_self = (f"Also skip the central agent repo itself "

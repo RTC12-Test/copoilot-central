@@ -64,7 +64,7 @@ class GitHubClient:
                     run_id=run.get("id"),
                     workflow_name=run.get("name", "Unknown Workflow"),
                     job_name=run.get("display_title", "Unknown Job"),
-                    broken_branch=run.get("head_branch", "main"),
+                    broken_branch=run.get("head_branch") or "",
                     head_sha=run.get("head_sha", ""),
                     html_url=run.get("html_url", ""),
                     updated_at=run.get("updated_at", ""),
@@ -169,7 +169,7 @@ class GitHubClient:
                     "name": r.get("name", ""),
                     "full_name": r.get("full_name", ""),
                     "url": r.get("html_url") or f"https://github.com/{r.get('full_name','')}",
-                    "default_branch": r.get("default_branch", "main"),
+                    "default_branch": r.get("default_branch") or "",
                     "topics": r.get("topics", []),
                     "pushed_at": r.get("pushed_at", ""),
                 })

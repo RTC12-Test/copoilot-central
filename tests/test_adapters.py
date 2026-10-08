@@ -1119,6 +1119,62 @@ class TestLabelResolution(unittest.TestCase):
                            updated_at="2026-09-29T06:33:27Z", head_sha="h")
         self.assertTrue(o.fix_single_run(ev_stale, repos))
 
+    def test_run_selection_unknown_branch_stays_candidate(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        # Runs whose head_branch the API did not report must not be dropped:
+        # no "main"/"master" assumption anywhere — the run stays a candidate
+        # and the target branch is resolved at fix time from the repo config.
+        class FakeClient:
+            def resolve_orgs_from_token(self):
+                return ["RTC12-Test"]
+
+            def list_recent_failed_runs(self, url, limit):
+                return [CIEvent(repo="RTC12-Test/asd2", run_id=77,
+                                workflow_name="W", job_name="J",
+                                broken_branch="", head_sha="h",
+                                updated_at=_ago(1))]
+
+        class AiModel:
+            name = "fake"
+            def is_available(self): return False
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.ai_model = AiModel()
+        chosen = o.get_latest_failed([{"name": "asd2", "url": "u2"}])
+        self.assertEqual(chosen.run_id, 77)
+
+    def test_client_no_hardcoded_default_branch(self):
+        from core.github_client import GitHubClient
+
+        c = GitHubClient(token="x")
+
+        # run with no head_branch -> broken_branch "" (never assumed "main")
+        def fake_runs(endpoint, method="GET", data=None, headers=None):
+            return {"workflow_runs": [
+                {"conclusion": "failure", "id": 1, "name": "CI",
+                 "display_title": "job", "head_sha": "a", "html_url": "u",
+                 "updated_at": "2026-10-01T00:00:00Z",
+                 "path": ".github/workflows/ci.yaml"}]}  # no head_branch key
+
+        c._api_request = fake_runs
+        evs = c.list_recent_failed_runs("https://github.com/RTC12-Test/asd2")
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0].broken_branch, "")
+
+        # org repo listing without default_branch -> "" so the runtime
+        # resolved / configured default branch takes over instead of "main"
+        def fake_repos(endpoint, method="GET", data=None, headers=None):
+            return [{"name": "asd2", "full_name": "RTC12-Test/asd2",
+                     "html_url": "https://github.com/RTC12-Test/asd2",
+                     "pushed_at": "2026-10-01T00:00:00Z", "topics": []}]
+
+        c._api_request = fake_repos
+        repos = c.list_org_repos("RTC12-Test")
+        self.assertEqual(repos[0]["default_branch"], "")
+
     def test_branch_health_client_semantics(self):
         from core.github_client import GitHubClient
 

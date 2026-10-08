@@ -165,7 +165,7 @@ class CIOrchestrator:
                     "labels": [t for t in r.get("topics", []) if t.startswith("ci_")],
                     "pushed_at": r.get("pushed_at", ""),
                     "repo_key": seen_key,
-                    "default_branch": r.get("default_branch", default_branch),
+                    "default_branch": r.get("default_branch") or default_branch,
                 })
         print(f"[DISCOVER] enumerated {len(discovered)} repos across {len(orgs)} org(s); "
               "selection delegated to the AI model")
@@ -409,36 +409,37 @@ class CIOrchestrator:
         default_branch = (default_fn(repo["url"]) if default_fn else None) \
             or repo.get("branch")
         for ev in failed:
-            if exists_fn and not exists_fn(repo["url"], ev.broken_branch):
-                print(f"[SCAN] {repo.get('name')}: branch '{ev.broken_branch}' "
+            branch = (ev.broken_branch or "").strip()
+            if branch and exists_fn and not exists_fn(repo["url"], branch):
+                print(f"[SCAN] {repo.get('name')}: branch '{branch}' "
                       f"was closed/deleted (no longer on the remote); skipping "
                       f"run {ev.run_id}")
                 continue
-            if default_branch and ev.broken_branch == default_branch:
+            if default_branch and branch and branch == default_branch:
                 print(f"[SCAN] {repo.get('name')}: run {ev.run_id} is ON the "
                       f"default branch '{default_branch}'; refusing to raise "
                       f"a fix PR against the default branch")
                 continue
-            if (merged_fn and default_branch
-                    and ev.broken_branch != default_branch
-                    and merged_fn(repo["url"], ev.broken_branch, default_branch)):
-                print(f"[SCAN] {repo.get('name')}: branch '{ev.broken_branch}' "
+            if (merged_fn and default_branch and branch
+                    and branch != default_branch
+                    and merged_fn(repo["url"], branch, default_branch)):
+                print(f"[SCAN] {repo.get('name')}: branch '{branch}' "
                       f"already merged into '{default_branch}'; skipping "
                       f"run {ev.run_id}")
                 continue
             pass_fn = getattr(self.client, "branch_has_passing_run_after", None)
-            if pass_fn and pass_fn(repo["url"], ev.broken_branch, ev.updated_at):
+            if branch and pass_fn and pass_fn(repo["url"], branch, ev.updated_at):
                 print(f"[SCAN] {repo.get('name')}: run {ev.run_id} is stale — "
-                      f"branch '{ev.broken_branch}' already has a newer "
+                      f"branch '{branch}' already has a newer "
                       f"successful run; skipping")
                 continue
             if has_batch:
-                open_pr = ev.broken_branch in covered
+                open_pr = branch in covered
             else:
                 open_pr = False
                 has_one = getattr(self.client, "has_open_fix_pr", None)
-                if has_one:
-                    open_pr = has_one(repo["url"], ev.broken_branch)
+                if has_one and branch:
+                    open_pr = has_one(repo["url"], branch)
             if open_pr:
                 print(f"[SCAN] {repo.get('name')}: run {ev.run_id} already has "
                       f"an open ai-fix PR (branch {ev.broken_branch}); skipping")
