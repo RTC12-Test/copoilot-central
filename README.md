@@ -46,6 +46,7 @@ what the API reports (or from config fallbacks) — never assumed to be `main`.
 - [Dynamic discovery (zero hardcoded values)](#dynamic-discovery-zero-hardcoded-values)
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
+- [GitHub token & permissions (least-privilege)](#github-token--permissions-least-privilege)
 - [Usage](#usage)
 - [Running as a service (systemd)](#running-as-a-service-systemd)
 - [Logging](#logging)
@@ -282,7 +283,7 @@ The agent contains several defense-in-depth guards, each unit-tested:
 
 | What | How it's resolved |
 |---|---|
-| **Orgs to scan** | Config `organizations:` override, else derived from the GitHub token (org memberships, or own account) |
+| **Orgs to scan** | Config `organizations:` override (REQUIRED for fine-grained PATs — they cannot list org memberships), else derived from the GitHub token (org memberships, or own account) |
 | **Repos** | Enumerated via the API from the resolved orgs; the agent's own repo excluded (`CI_SELF_REPO` / config / git remote) |
 | **Default branch** | API `default_branch` per repo → config `monitoring.default_branch` → per-org `branch:` override → empty (never a hardcoded name like `main`) |
 | **Tech per run** | Workflow file name, else log signatures (generates `ci_<tech>` per run) |
@@ -360,6 +361,71 @@ ai:
 
 ---
 
+## GitHub token & permissions (least-privilege)
+
+The agent needs API access to read repositories, browse branches, read GitHub
+Actions runs and job logs, and open pull requests on fix branches. GitHub offers
+classic PATs (`ghp_...`, all-or-nothing scopes) and **fine-grained PATs**
+(`github_pat_...`, scoped to one resource owner with per-permission control).
+Use a fine-grained PAT.
+
+Endpoints the agent calls → required fine-grained permissions:
+
+| Endpoint | Permission |
+|---|---|
+| `GET /user`, `GET /user/memberships/orgs`, repo metadata | Metadata: **Read** (auto, can't be turned off) |
+| `GET /repos/{o}/{r}`, `…/branches`, `…/git/refs`, `…/contents` | Contents: **Read** |
+| Push fix branches & commit files (`git push`) | Contents: **Read and write** |
+| `GET …/actions/runs`, `…/actions/jobs/{id}/logs` | Actions: **Read** |
+| `GET/POST/PATCH …/pulls` (list, open, close) | Pull requests: **Read and write** |
+
+Minimal set: **Metadata (Read, auto) · Actions (Read) · Contents (Read/write) ·
+Pull requests (Read/write)** — everything else **No access**.
+
+Create and install it:
+
+1. Open https://github.com/settings/personal-access-tokens/new and set:
+   - **Resource owner**: the *organization* (one PAT per org — a fine-grained
+     PAT is scoped to a single resource owner, so covering two orgs needs two
+     PATs, e.g. two service instances/`GITHUB_TOKEN`s).
+   - **Repository access**: All repositories (of that org).
+   - **Expiration**: 90 days (or your security policy).
+   - **Permissions**: exactly the four rows in the table above.
+2. Copy the token value **once**.
+3. Never commit it or paste it into chat. Persist it only to a root-only env
+   file (the systemd unit already loads it via
+   `EnvironmentFile=-/etc/copoilot-central.env`):
+
+   ```bash
+   echo 'GITHUB_TOKEN=github_pat_...' | sudo tee /etc/copoilot-central.env
+   sudo chmod 600 /etc/copoilot-central.env
+   sudo systemctl restart copoilot-central
+   ```
+
+**Fine-grained tokens cannot list org memberships** (`GET /user/memberships/orgs`
+returns an empty list), so the agent cannot auto-derive which orgs to scan and
+falls back to the user account (which has no org repos). Pin the org explicitly
+in `config/ci_remediation.yaml`:
+
+```yaml
+organizations:
+  - name: RTC12-Test
+```
+
+Then `sudo systemctl restart copoilot-central` and verify discovery:
+
+```bash
+grep -E '\[DISCOVER\]|\[WARN\]' /var/log/agent.log | tail -5   # expect 34 repos…
+```
+
+Finally, revoke the old all-permissions classic token at
+https://github.com/settings/tokens.
+
+> If a token value ever ends up in a chat message, issue, or log, revoke it
+> immediately and create a replacement — treat it as compromised.
+
+---
+
 ## Usage
 
 ```bash
@@ -394,8 +460,9 @@ sudo systemctl enable --now copoilot-central
 ```
 
 The unit runs `main.py --watch` (polling every 300 s by default) as user
-`ghost` with `Restart=always`, logging to `/var/log/agent.log`. Manage it like
-any service:
+`ghost` with `Restart=always`, loading the token from
+`EnvironmentFile=-/etc/copoilot-central.env` (root-only, mode 600) and logging
+to `/var/log/agent.log`. Manage it like any service:
 
 ```bash
 sudo systemctl status copoilot-central

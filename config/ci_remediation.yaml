@@ -9,9 +9,17 @@
 #   - the authenticated user's org memberships, or
 #   - the user's own account if they belong to no org.
 #
-# `organizations` (OPTIONAL): override to pin specific orgs to scan instead of
-# deriving them from the token. Accepts a list of names or a list of dicts
-# {name: <org>, branch: <default branch>}.
+# IMPORTANT — with a fine-grained PAT (github_pat_...), the default derivation
+# CANNOT work: fine-grained tokens do not return org memberships from
+# GET /user/memberships/orgs (empty list), so the agent would fall back to the
+# user's own account and fail to enumerate any org repos. For fine-grained
+# tokens `organizations` MUST be pinned explicitly (see below).
+#
+# `organizations`: pin the specific orgs to scan instead of deriving them from
+# the token. Accepts a list of names or a list of dicts
+# {name: <org>, branch: <default branch>}. One org per fine-grained token —
+# a token is scoped to a single resource owner, so an extra org needs its own
+# token and its own service instance (or a second GITHUB_TOKEN config).
 #
 # `repositories` (OPTIONAL seed / override): if provided, this fixed list is
 # used INSTEAD of dynamic discovery. Useful to pin default branches or include
@@ -92,10 +100,11 @@ monitoring:
   #   last 24h of failures are handled instead of digging into history.
   #   Runtime override: CI_RUN_WINDOW_HOURS.
 
-# Uncomment to pin organizations (otherwise derived from the token):
-# organizations:
-#   - name: RTC12-Test
-#     branch: feature/tas
+# Pin the organizations to scan. REQUIRED when using a fine-grained PAT (see
+# the header comment above). The token must have at least Metadata:read +
+# Contents:read on these orgs' repositories (works for org-owned repos).
+organizations:
+  - name: RTC12-Test
 
 # Optional explicit override — uncomment to use a fixed list instead of discovery:
 # repositories:
