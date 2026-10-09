@@ -378,9 +378,11 @@ Endpoints the agent calls → required fine-grained permissions:
 | Push fix branches & commit files (`git push`) | Contents: **Read and write** |
 | `GET …/actions/runs`, `…/actions/jobs/{id}/logs` | Actions: **Read** |
 | `GET/POST/PATCH …/pulls` (list, open, close) | Pull requests: **Read and write** |
+| GitHub Copilot CLI (`copilot -p …`, when `fixing.engine: ai`) | Account → **Copilot requests**: **Read** (fine-grained-only permission, required or Copilot CLI fails with `Error: Authentication failed`) |
 
 Minimal set: **Metadata (Read, auto) · Actions (Read) · Contents (Read/write) ·
-Pull requests (Read/write)** — everything else **No access**.
+Pull requests (Read/write) · Copilot requests (Read)** — everything else
+**No access**.
 
 Create and install it:
 
@@ -390,7 +392,7 @@ Create and install it:
      PATs, e.g. two service instances/`GITHUB_TOKEN`s).
    - **Repository access**: All repositories (of that org).
    - **Expiration**: 90 days (or your security policy).
-   - **Permissions**: exactly the four rows in the table above.
+   - **Permissions**: exactly the five rows in the table above.
 2. Copy the token value **once**.
 3. Never commit it or paste it into chat. Persist it only to a root-only env
    file (the systemd unit already loads it via

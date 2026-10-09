@@ -453,6 +453,58 @@ class TestLabelResolution(unittest.TestCase):
         self.assertIsNotNone(ev)
         self.assertEqual(ev.run_id, 22)
 
+    def test_first_failed_run_skips_previously_unremediable_run(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        unr = CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                      job_name="J", broken_branch="f", head_sha="a",
+                      updated_at=_ago(1))
+        older = CIEvent(repo="RTC12-Test/asd2", run_id=22, workflow_name="W",
+                        job_name="J", broken_branch="f", head_sha="b",
+                        updated_at=_ago(2))
+
+        class FakeClient:
+            def list_recent_failed_runs(self, url, limit):
+                return [unr, older]
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o._unremediable_runs = {11}
+        ev = o._first_failed_run({"name": "asd2", "url": "u1"})
+        # the run the agent already tried (no logs -> no tech) is skipped so
+        # the loop advances to the next eligible failure instead of stalling
+        self.assertEqual(ev.run_id, 22)
+
+    def test_fix_single_run_records_unremediable_run_on_tech_skip(self):
+        from engine.orchestrator import CIOrchestrator
+        from core.models import CIEvent
+
+        ev = CIEvent(repo="RTC12-Test/asd2", run_id=11, workflow_name="W",
+                     job_name="J", broken_branch="feature/test", head_sha="a",
+                     updated_at=_ago(1))
+
+        class FakeClient:
+            def branch_exists(self, url, branch):
+                return True
+            def get_default_branch(self, url):
+                return "main"
+            def branch_merged_into_base(self, url, branch, base):
+                return False
+            def branch_has_passing_run_after(self, url, branch, updated_at):
+                return False
+            def has_open_fix_pr(self, url, base):
+                return False
+            def get_failed_job_logs(self, url, run_id):
+                return ""  # gone/evicted -> no tech resolvable
+
+        o = CIOrchestrator(github_token="")
+        o.client = FakeClient()
+        o.repo_manager = type("RM", (), {})()  # not reached on the skip path
+        ok = o.fix_single_run(ev, [{"name": "asd2", "url": "u1"}])
+        self.assertTrue(ok)
+        self.assertEqual(o._unremediable_runs, {11})
+
     def test_run_selection_ai_picks_run(self):
         from engine.orchestrator import CIOrchestrator
 
